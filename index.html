@@ -185,6 +185,7 @@ canvas { display: block; width: 100%; height: 100%; }
       <label class="btn" for="fileIn" tabindex="0" id="fileLabel" title="Or drag a song onto the page">Open song file</label>
       <input type="file" id="fileIn" hidden>
       <button id="btnMic" class="btn" type="button">Microphone</button>
+      <button id="btnPause" class="btn" type="button" hidden>⏸ Pause</button>
       <button id="btnStop" class="btn" type="button" disabled>■ Stop</button>
       <button id="btnResume" class="btn primary" type="button" hidden>▶ Tap to start playback</button>
     </div>
@@ -1241,7 +1242,8 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       setStatus("Listening · input level " + "▮".repeat(lvl) + "▯".repeat(10 - lvl) + (lvl < 1 ? "  (very quiet: move closer or raise the mic volume in Windows Sound settings)" : ""));
     }
     if (frame % 20 === 0) checkRunning();
-    if (mode === "file" && frame % 15 === 0 && ctx.state !== "running") setStatus("The browser paused the sound. Tap “Tap to start playback”.");
+    if (PAUSED) { /* keep the paused message */ }
+    else if (mode === "file" && frame % 15 === 0 && ctx.state !== "running") setStatus("The browser paused the sound. Tap “Tap to start playback”.");
     else if (mode === "file" && frame % 15 === 0) setStatus("Playing " + fileName + " · " + fmt(t) + " / " + fmt(fileDur));
     raf = requestAnimationFrame(loop);
   }
@@ -1254,6 +1256,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     if (analyser) { try { analyser.disconnect(); } catch (e) {} }
     els.btnStop.disabled = true;
     lastVoiced = false;
+    PAUSED = false; var bp = document.getElementById("btnPause"); if (bp) { bp.hidden = true; bp.textContent = "⏸ Pause"; bp.classList.remove("primary"); }
     var br = document.getElementById("btnResume"); if (br) br.hidden = true;
     if (!silent) {
       showNow(null); drawTrace(); renderBars(); renderSeq();
@@ -1299,11 +1302,36 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
   });
   function checkRunning() {
     if (!ctx) return;
-    btnResume.hidden = !(LIVE && ctx.state !== "running");
+    btnResume.hidden = !(LIVE && !PAUSED && ctx.state !== "running");
   }
+  // pause and resume a song file: the sound and the analysis both freeze in place
+  var PAUSED = false, btnPause = document.getElementById("btnPause");
+  function setPauseUI() {
+    btnPause.hidden = !(LIVE && mode === "file");
+    btnPause.textContent = PAUSED ? "▶ Resume" : "⏸ Pause";
+    btnPause.classList.toggle("primary", PAUSED);
+  }
+  function togglePause() {
+    if (!LIVE || mode !== "file" || !ctx) return;
+    if (!PAUSED) {
+      ctx.suspend().then(function () {
+        PAUSED = true; setPauseUI();
+        setStatus("Paused " + fileName + " at " + fmt(ctx.currentTime - t0) + " / " + fmt(fileDur) + ". Press Resume to continue.");
+      }, function () {});
+    } else {
+      ctx.resume().then(function () { PAUSED = false; setPauseUI(); }, function () {});
+    }
+  }
+  btnPause.addEventListener("click", togglePause);
+  document.addEventListener("keydown", function (e) {
+    var tg = e.target && e.target.tagName;
+    if (e.key !== " " || tg === "INPUT" || tg === "SELECT" || tg === "BUTTON" || tg === "TEXTAREA" || tg === "LABEL") return;
+    if (LIVE && mode === "file") { e.preventDefault(); togglePause(); }
+  });
   els.fileLabel.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); els.fileIn.click(); } });
   els.fileIn.addEventListener("change", function () {
     var file = els.fileIn.files && els.fileIn.files[0]; els.fileIn.value = "";
+    try { els.fileLabel.blur(); } catch (e) {}   // so the space bar can pause
     if (file) loadFile(file);
   });
   document.addEventListener("dragover", function (e) { e.preventDefault(); });
@@ -1335,6 +1363,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
         } catch (e) { showBpm(null, "Couldn't work out the tempo"); }
       }, 30);
       setStatus("Playing " + fileName + " · 0:00 / " + fmt(fileDur));
+      PAUSED = false; setPauseUI();
     }).catch(function () {
       setStatus("Couldn't read that file. Try an MP3, WAV, M4A or OGG audio file.", true);
     });
