@@ -4,7 +4,7 @@ Swara Lens listens to a song and charts its notes as Indian swaras (Sa Re Ga Ma 
 
 - Open a song file (MP3, WAV, M4A, OGG), use the microphone, or play the demo scale
 - Two listening modes: "One instrument or voice" (default, precise for practice and fast passages) and "Full song (voice first)", which follows the voice first, then wind instruments, then strings, and ignores drums and beats
-- Line graph with one circle per note, labelled with its swara; pauses drop to a Silence line
+- Line graph with one circle per note, labelled with its swara; pauses join the notes directly and a long gap breaks the line
 - Current pitch, the song's scale (with harmonium Safed/Kaali name) and tempo in BPM
 - A copyable swara sequence
 
