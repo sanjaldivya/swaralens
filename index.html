@@ -296,7 +296,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     { r: "Dha", d: "ध", t: "s" }, { r: "Ni", d: "नि", t: "k" }, { r: "Ni", d: "नि", t: "s" }
   ];
   var SAPTAK = { "-2": "Ati-mandra", "-1": "Mandra", "0": "Madhya", "1": "Taar", "2": "Ati-taar" };
-  var WIN = 12, MIN_DUR = 0.07, MIN_HITS = 5, REART_GAP = 0.06, CUR_HOLD = 0.15;
+  var WIN = 12, MIN_DUR = 0.07, MIN_HITS = 5, REART_GAP = 0.02, CUR_HOLD = 0.15;
 
   var S = {
     saNote: 0, saOct: 4, tune: 0, script: "r",
@@ -759,7 +759,19 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     resetData(); S.example = false; seqDirty = true;
     liveEnv = []; showBpm(null, newMode === "file" ? "Working out the tempo…" : "Listening for the beat…");
     document.getElementById("pNote").textContent = "—";
-    fileMono = null; MEL.reset(ctx.sampleRate);
+    fileMono = null; MEL.reset(ctx.sampleRate); genT = 0; anaT = 0; selQ = []; lastFM = null; lastFHz = 0;
+    liveLen = 0;
+    if (newMode !== "file") {
+      // capture every sample (the analyser only shows the latest moment)
+      proc = ctx.createScriptProcessor(4096, 1, 1);
+      proc.onaudioprocess = function (e) {
+        var d = e.inputBuffer.getChannelData(0);
+        for (var q = 0; q < d.length; q++) liveRing[(liveLen + q) & LIVE_MASK] = d[q];
+        liveLen += d.length;
+      };
+      procOut = ctx.createGain(); procOut.gain.value = 0;
+      analyser.connect(proc); proc.connect(procOut); procOut.connect(ctx.destination);
+    }
     mode = newMode; LIVE = true; VIEW = "win"; panT = null; updateViewUI(); t0 = ctx.currentTime; lastT = 0; med = []; frame = 0;
     els.tag.textContent = tag;
     els.btnStop.disabled = false;
@@ -813,7 +825,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
 
     function reset(rate) {
       sr = rate; binHz = sr / N; lo = Math.floor(90 / binHz); hi = Math.min(HALF - 2, Math.ceil(5000 / binHz));
-      ring = []; contours = []; recent = []; holdPri = 0; holdT = -9; chosen = null; selHist = []; selEs = []; lastOn = -1; ctx = []; refS = 0; refT = 0; challenger = null; peakE = 0;
+      ring = []; contours = []; recent = []; holdPri = 0; holdT = -9; chosen = null; selHist = []; selEs = []; lastOn = -1; ctx = []; refS = 0; refT = 0; lastOut = null; challenger = null; peakE = 0;
       gridF = []; for (var c = 0; ; c += 10) { var f = 80 * Math.pow(2, c / 1200); if (f > 1100) break; gridF.push(f); }
       sal = new Float32Array(gridF.length);
     }
@@ -956,6 +968,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
           var hv = [], e = 0, top = 0;
           for (h = 1; h <= 10; h++) { var v = cd.f * h / binHz < hi ? peakAt(cd.f * h) : 0; hv.push(v); e += v * v; if (h >= 2 && h <= 5 && v > top) top = v; }
           if (hv[0] < 0.06 * top) continue;                    // phantom: no energy at its own fundamental
+          if (hv[0] < 0.02 * fmax) continue;                   // fundamental lost in the background
           var hiE = 0; for (h = 4; h < 10; h++) hiE += hv[h] * hv[h];
           var fr = refine(cd.f);
           kept.push({ f: fr, m: 69 + 12 * Math.log(fr / 440) / Math.LN2, s: cd.s, e: e, r1: hv[0] * hv[0] / (e || 1), hs: hiE / (e || 1) });
@@ -1035,7 +1048,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
 
     // pick the line to follow. For song files this runs ~0.4 s behind the analysis,
     // so each line's type is judged with what comes next as well.
-    var selHist = [], selEs = [], lastOn = -1, ctx = [], refS = 0, refT = 0;
+    var selHist = [], selEs = [], lastOn = -1, ctx = [], refS = 0, refT = 0, lastOut = null;
     function labelAt(en) {
       var h = en.c.clsH, cnt = {}, best = null, bc = 0;
       for (var i = en.i; i < h.length && i <= en.i + 20; i++) {
@@ -1058,7 +1071,8 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
         var sc = PRI[en.cls] * 10 + en.s / maxS; if (sc > bs) { bs = sc; top = en; }
       }
       // hold through a short dropout of the followed note instead of jumping to a much weaker line
-      if (!cur && chosen && t - chosen.selT < 0.15 && (!top || top.s < 0.8 * chosen.selS)) return { m: null, onset: false, hold: true };
+      if (!cur && chosen && t - chosen.selT < 0.15 && (!top || top.s < 0.8 * chosen.selS))
+        return { m: (chosen.selN || 0) >= 8 ? lastOut : null, onset: false, hold: true };
       var pick = top;
       if (top && cur && cur !== top) {
         var pc = PRI[cur.cls], pb = PRI[top.cls];
@@ -1072,14 +1086,16 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       }
       chosen = pick ? pick.c : null;
       if (!pick) return { m: null, onset: false };
-      pick.c.selT = t; pick.c.selS = pick.s;
+      pick.c.selT = t; pick.c.selS = pick.s; pick.c.selN = (pick.c.selN || 0) + 1;
       if (pick.s > refS) refS = pick.s;
       selHist.push(pick.m); if (selHist.length > 3) selHist.shift();
-      selEs.push(pick.e); if (selEs.length > 8) selEs.shift();
+      selEs.push(pick.e); if (selEs.length > 16) selEs.shift();
       var onset = false, ne = selEs.length;
-      if (ne > 6 && pick.n > 12) {
-        var mn = Infinity; for (i = 0; i < ne - 1; i++) if (selEs[i] < mn) mn = selEs[i];
-        if (selEs[ne - 1] > 3 * mn && t - lastOn > 0.15) { onset = true; lastOn = t; }
+      if (ne > 8 && pick.n > 12) {
+        // a re-strike: the note faded into a dip, then rose sharply again
+        var mi = 0; for (i = 1; i < ne - 1; i++) if (selEs[i] < selEs[mi]) mi = i;
+        var mn = selEs[mi], before = 0; for (i = 0; i < mi; i++) if (selEs[i] > before) before = selEs[i];
+        if (before >= 1.7 * mn && selEs[ne - 1] > 2.5 * mn && t - lastOn > 0.15) { onset = true; lastOn = t; selEs = [selEs[ne - 1]]; }
       }
       var h3 = selHist.slice().sort(function (p, q) { return p - q; });
       var mo = h3[h3.length >> 1];
@@ -1095,7 +1111,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
           }
         }
       }
-      ctx.push({ t: t, m: mo });
+      ctx.push({ t: t, m: mo }); lastOut = mo;
       return { m: mo, onset: onset, cls: pick.cls };
     }
     function analyse(ci, t, causal) { return select(track(ci, t, causal), t); }
@@ -1106,27 +1122,40 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
   var fileMono = null, fileSr = 44100, nextHop = 0, shortRms = [], lastFM = null, lastFHz = 0, lastOnset = -1;
   var HOP = 0.0125, FWIN = MEL.N, segBuf = new Float32Array(MEL.N);
   var genT = 0, anaT = 0, selQ = [], AHEAD = 0.4;
-  function analyseFileUpTo(target, flush) {
-    if (!fileMono) return;
-    var len = fileMono.length, i;
-    // analysis runs ~0.4 s ahead of what you hear, so a new note is judged with what follows it
-    var until = flush ? target + AHEAD : target + AHEAD;
-    while (anaT <= until + 1e-9) {
-      while (genT <= anaT + MEL.LA * HOP + 1e-6) {
-        var c = Math.round(genT * fileSr), st = c - FWIN / 2;
-        for (i = 0; i < FWIN; i++) { var k = st + i; segBuf[i] = k >= 0 && k < len ? fileMono[k] : 0; }
+  // live sound (microphone, demo) is captured continuously so it gets the same analysis as a file
+  var LIVE_N = 1 << 20, LIVE_MASK = LIVE_N - 1, liveRing = new Float32Array(LIVE_N), liveLen = 0, proc = null, procOut = null;
+  function liveSample(k) { return k < liveLen - LIVE_N ? 0 : liveRing[k & LIVE_MASK]; }
+  function fileSample(k) { return fileMono[k]; }
+  function pump(src, len, sr, haveT, outT) {
+    var i;
+    // analysis runs ~0.4 s ahead of what is shown, so a new note is judged with what follows it
+    while (anaT <= outT + AHEAD + 1e-9) {
+      var need = anaT + MEL.LA * HOP;
+      if (need + FWIN / 2 / sr > haveT) break;          // wait for more sound
+      while (genT <= need + 1e-6) {
+        var c = Math.round(genT * sr), st = c - FWIN / 2;
+        for (i = 0; i < FWIN; i++) { var k = st + i; segBuf[i] = k >= 0 && k < len ? src(k) : 0; }
         MEL.pushFrame(segBuf, genT); genT += HOP;
       }
       var ci = MEL.indexOf(anaT);
       selQ.push({ t: anaT, snap: ci >= 0 ? MEL.track(ci, anaT, false) : [] });
       anaT += HOP;
     }
-    while (selQ.length && selQ[0].t <= target + 1e-9) {
+    while (selQ.length && selQ[0].t <= outT + 1e-9) {
       var it = selQ.shift(), r = MEL.select(it.snap, it.t);
       if (r.onset && S.seg.emitted != null) S.onset = true;
       processFrame(it.t, r.m, HOP);
       lastFM = r.m; lastFHz = r.m == null ? 0 : midiToHz(r.m);
     }
+  }
+  function analyseFileUpTo(target) {
+    if (!fileMono) return;
+    pump(fileSample, fileMono.length, fileSr, Infinity, target);
+  }
+  function analyseLive(flush) {
+    var sr = ctx.sampleRate, have = liveLen / sr;
+    if (flush) pump(liveSample, liveLen, sr, Infinity, have);
+    else pump(liveSample, liveLen, sr, have, have - AHEAD - MEL.LA * HOP - FWIN / 2 / sr);
   }
 
   function loop() {
@@ -1137,12 +1166,9 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       analyseFileUpTo(Math.min(t, fileDur));
       m = lastFM; hz = lastFHz;
     } else {
-      analyser.getFloatTimeDomainData(buf);
-      MEL.pushFrame(buf, t);
-      var rr = MEL.analyse(MEL.size() - 1, t, true);
-      if (rr.onset && S.seg.emitted != null) S.onset = true;
-      m = rr.m; hz = m == null ? 0 : midiToHz(m);
-      processFrame(t, m, dt);
+      analyser.getFloatTimeDomainData(buf);   // for the level meter and live tempo
+      analyseLive(false);
+      m = lastFM; hz = lastFHz;
     }
     lastVoiced = m != null; if (m != null) lastM = m;
     showNow(m, hz);
@@ -1170,6 +1196,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     LIVE = false; cancelAnimationFrame(raf);
     if (src) { try { src.onended = null; src.stop(); } catch (e) {} try { src.disconnect(); } catch (e) {} src = null; }
     if (micStream) { micStream.getTracks().forEach(function (tr) { tr.stop(); }); micStream = null; }
+    if (proc) { proc.onaudioprocess = null; try { proc.disconnect(); procOut.disconnect(); } catch (e) {} proc = null; procOut = null; }
     if (analyser) { try { analyser.disconnect(); } catch (e) {} }
     els.btnStop.disabled = true;
     lastVoiced = false;
@@ -1182,6 +1209,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
   }
 
   function finished(msg) {
+    if (mode && mode !== "file" && LIVE) analyseLive(true);
     var lp = S.points[S.points.length - 1];
     if (lp && lp.m != null) S.points.push({ t: lp.t + 0.05, m: null });
     var le2 = S.ev[S.ev.length - 1];
