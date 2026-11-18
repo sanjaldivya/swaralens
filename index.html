@@ -813,7 +813,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
 
     function reset(rate) {
       sr = rate; binHz = sr / N; lo = Math.floor(90 / binHz); hi = Math.min(HALF - 2, Math.ceil(5000 / binHz));
-      ring = []; contours = []; recent = []; holdPri = 0; holdT = -9; chosen = null; selHist = []; selEs = []; lastOn = -1; ctx = []; challenger = null; peakE = 0;
+      ring = []; contours = []; recent = []; holdPri = 0; holdT = -9; chosen = null; selHist = []; selEs = []; lastOn = -1; ctx = []; refS = 0; refT = 0; challenger = null; peakE = 0;
       gridF = []; for (var c = 0; ; c += 10) { var f = 80 * Math.pow(2, c / 1200); if (f > 1100) break; gridF.push(f); }
       sal = new Float32Array(gridF.length);
     }
@@ -968,7 +968,9 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
         var cand = cands[i], best = null, bd = 0.6;
         for (j = 0; j < contours.length; j++) {
           var c = contours[j];
-          if (c.lastT === t || c.lastT < t - 0.06) continue;
+          var dm = Math.abs(cand.m - c.lastM);
+          // a short dropout at the same pitch is the same note, not a new one
+          if (c.lastT === t || c.lastT < t - (dm < 0.4 ? 0.15 : 0.06)) continue;
           if (Math.abs(cand.r1 - avg(c.r1s, 5)) > 0.35) continue;   // tone colour jumped: a different sound
           var d = Math.abs(cand.m - c.lastM); if (d < bd) { bd = d; best = c; }
         }
@@ -1005,7 +1007,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
         (best.clsH || (best.clsH = [])).push(best.cls);
       }
       contours = contours.filter(function (c) {
-        if (c.lastT >= t - 0.12) return true;
+        if (c.lastT >= t - 0.16) return true;
         if (c.cls === "vocal" || c.cls === "wind") recent.push(c);
         return false;
       });
@@ -1013,13 +1015,27 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
 
       // everything sounding now, for the selection step
       var snap = [];
+      // a weak line sitting exactly on a harmonic of a much stronger line is part of that note
+      var HI = [12, 19.02, 24, 7.02];
+      contours.forEach(function (c) {
+        if (c.lastT !== t) return;
+        c.hn = (c.hn || 0) + 1;
+        var own = c.own && jitter(c) >= 5;
+        if (own) return;
+        for (var q = 0; q < contours.length; q++) {
+          var b2 = contours[q]; if (b2 === c || b2.lastT !== t || b2.s < 2 * c.s) continue;
+          var dd = c.lastM - b2.lastM, hit = false;
+          for (var hI = 0; hI < HI.length; hI++) if (Math.abs(dd - HI[hI]) < 0.3) hit = true;
+          if (hit && c.t0 >= b2.t0 - 0.03) { c.hf = (c.hf || 0) + 1; break; }
+        }
+      });
       contours.forEach(function (c) { if (c.lastT === t) snap.push({ c: c, m: c.lastM, s: c.s, e: c.es[c.es.length - 1], n: c.clsH.length, i: c.clsH.length - 1 }); });
       return snap;
     }
 
     // pick the line to follow. For song files this runs ~0.4 s behind the analysis,
     // so each line's type is judged with what comes next as well.
-    var selHist = [], selEs = [], lastOn = -1, ctx = [];
+    var selHist = [], selEs = [], lastOn = -1, ctx = [], refS = 0, refT = 0;
     function labelAt(en) {
       var h = en.c.clsH, cnt = {}, best = null, bc = 0;
       for (var i = en.i; i < h.length && i <= en.i + 20; i++) {
@@ -1032,12 +1048,17 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       for (var q = 0; q < snap.length; q++) snap[q].cls = labelAt(snap[q]);
       var maxS = 0, i, top = null, bs = -1, cur = null;
       for (i = 0; i < snap.length; i++) if (snap[i].s > maxS) maxS = snap[i].s;
+      // recent loudness reference: fading tails and echoes far below it are not notes
+      refS = refS * Math.exp(-(t - refT) / 2); refT = t;
       for (i = 0; i < snap.length; i++) {
         var en = snap[i], c = en.c;
         if (chosen && (c === chosen || c.contOf === chosen)) cur = en;
-        if (en.n < 3 || en.s < 0.12 * maxS) continue;
+        if (en.n < 3 || en.s < 0.12 * maxS || en.s < 0.2 * refS) continue;
+        if (c.hn >= 4 && (c.hf || 0) >= 0.3 * c.hn && !c.own) continue;   // mostly a harmonic of another note
         var sc = PRI[en.cls] * 10 + en.s / maxS; if (sc > bs) { bs = sc; top = en; }
       }
+      // hold through a short dropout of the followed note instead of jumping to a much weaker line
+      if (!cur && chosen && t - chosen.selT < 0.15 && (!top || top.s < 0.8 * chosen.selS)) return { m: null, onset: false, hold: true };
       var pick = top;
       if (top && cur && cur !== top) {
         var pc = PRI[cur.cls], pb = PRI[top.cls];
@@ -1051,6 +1072,8 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       }
       chosen = pick ? pick.c : null;
       if (!pick) return { m: null, onset: false };
+      pick.c.selT = t; pick.c.selS = pick.s;
+      if (pick.s > refS) refS = pick.s;
       selHist.push(pick.m); if (selHist.length > 3) selHist.shift();
       selEs.push(pick.e); if (selEs.length > 8) selEs.shift();
       var onset = false, ne = selEs.length;
