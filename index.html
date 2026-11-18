@@ -813,7 +813,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
 
     function reset(rate) {
       sr = rate; binHz = sr / N; lo = Math.floor(90 / binHz); hi = Math.min(HALF - 2, Math.ceil(5000 / binHz));
-      ring = []; contours = []; recent = []; holdPri = 0; holdT = -9; chosen = null; selHist = []; selEs = []; lastOn = -1; challenger = null; peakE = 0;
+      ring = []; contours = []; recent = []; holdPri = 0; holdT = -9; chosen = null; selHist = []; selEs = []; lastOn = -1; ctx = []; challenger = null; peakE = 0;
       gridF = []; for (var c = 0; ; c += 10) { var f = 80 * Math.pow(2, c / 1200); if (f > 1100) break; gridF.push(f); }
       sal = new Float32Array(gridF.length);
     }
@@ -1019,7 +1019,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
 
     // pick the line to follow. For song files this runs ~0.4 s behind the analysis,
     // so each line's type is judged with what comes next as well.
-    var selHist = [], selEs = [], lastOn = -1;
+    var selHist = [], selEs = [], lastOn = -1, ctx = [];
     function labelAt(en) {
       var h = en.c.clsH, cnt = {}, best = null, bc = 0;
       for (var i = en.i; i < h.length && i <= en.i + 20; i++) {
@@ -1059,7 +1059,21 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
         if (selEs[ne - 1] > 3 * mn && t - lastOn > 0.15) { onset = true; lastOn = t; }
       }
       var h3 = selHist.slice().sort(function (p, q) { return p - q; });
-      return { m: h3[h3.length >> 1], onset: onset, cls: pick.cls };
+      var mo = h3[h3.length >> 1];
+      // octave guard from context: a sudden jump of 9+ semitones above where the melody has
+      // been, with something sounding exactly an octave lower, is the harmonic, not the note
+      while (ctx.length && ctx[0].t < t - 1.5) ctx.shift();
+      if (ctx.length >= 20) {
+        var cs = ctx.map(function (p) { return p.m; }).sort(function (p, q) { return p - q; });
+        var cmed = cs[cs.length >> 1];
+        if (mo - cmed >= 7) {
+          for (i = 0; i < snap.length; i++) {
+            if (snap[i] !== pick && Math.abs(mo - 12 - snap[i].m) < 0.35 && snap[i].s >= 0.15 * pick.s) { mo -= 12; break; }
+          }
+        }
+      }
+      ctx.push({ t: t, m: mo });
+      return { m: mo, onset: onset, cls: pick.cls };
     }
     function analyse(ci, t, causal) { return select(track(ci, t, causal), t); }
     return { reset: reset, pushFrame: pushFrame, analyse: analyse, track: track, select: select, indexOf: indexOf, size: function () { return ring.length; }, LA: LA, N: N };
