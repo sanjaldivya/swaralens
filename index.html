@@ -268,6 +268,11 @@ canvas { display: block; width: 100%; height: 100%; }
             <button type="button" id="vWin" aria-pressed="true">Last 12 s</button>
             <button type="button" id="vAll" aria-pressed="false">Whole song</button>
           </div>
+          <div class="seg" role="group" aria-label="Scroll the chart">
+            <button type="button" id="vUp" aria-label="Show higher notes" title="Show higher notes">▲</button>
+            <button type="button" id="vDown" aria-label="Show lower notes" title="Show lower notes">▼</button>
+            <button type="button" id="vCentre" title="Centre on the notes" hidden>Centre</button>
+          </div>
           <button type="button" id="btnClear" class="btn small">Clear</button>
           <span class="tag" id="traceTag">Example</span>
         </div>
@@ -592,7 +597,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     var v = function (n) { return cs.getPropertyValue(n).trim(); };
     return { ink: v("--ink"), muted: v("--muted"), line: v("--line"), strong: v("--line-strong"), accent: v("--accent"), bg: v("--surface") };
   }
-  var LIVE = false, VIEW = "win", panT = null;
+  var LIVE = false, VIEW = "win", panT = null, VOFF = 0;
   function updateViewUI() {
     document.getElementById("vWin").setAttribute("aria-pressed", VIEW === "win" ? "true" : "false");
     document.getElementById("vAll").setAttribute("aria-pressed", VIEW === "all" ? "true" : "false");
@@ -612,14 +617,15 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     g2.setTransform(dpr, 0, 0, dpr, 0, 0);
     g2.fillStyle = C.bg; g2.fillRect(0, 0, W, H);
     var L = 56, R = 12, T = 14, B = 26, lo = -500, hi = 1900;
-    // widen the range to fit every note heard (up to two octaves either side of Sa)
-    var saM = saMidi();
-    for (var ei = 0; ei < S.ev.length; ei++) {
-      var em = S.ev[ei].m; if (em == null) continue;
-      var ec = (em - saM) * 100;
-      if (ec - 100 < lo) lo = Math.max(-2400, Math.floor((ec - 100) / 100) * 100);
-      if (ec + 100 > hi) hi = Math.min(2400, Math.ceil((ec + 100) / 100) * 100);
+    // show exactly two octaves, centred on the notes heard; the arrows scroll it up or down
+    var saM = saMidi(), cs = [];
+    for (var ei = 0; ei < S.ev.length; ei++) if (S.ev[ei].m != null) cs.push((S.ev[ei].m - saM) * 100);
+    if (cs.length) {
+      cs.sort(function (p, q) { return p - q; });
+      var pLo = cs[Math.floor(cs.length * 0.05)], pHi = cs[Math.min(cs.length - 1, Math.floor(cs.length * 0.95))];
+      lo = Math.round(((pLo + pHi) / 2 - 1200) / 100) * 100;
     }
+    lo += VOFF; lo = Math.max(-3600, Math.min(2400, lo)); hi = lo + 2400;
     var PB = H - B - 6;
     var y = function (c) { return T + (hi - c) / (hi - lo) * (PB - T); };
     var fontFam = S.script === "d" ? '"Tiro Devanagari Hindi", serif' : "Mukta, system-ui, sans-serif";
@@ -1390,6 +1396,20 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     updateViewUI(); renderSeq(); renderBars(); drawTrace();
     setStatus(LIVE ? "Graph cleared. Still listening; new notes start from here." : "Graph cleared. Play the demo, open a song file or use the microphone.");
   });
+
+  // vertical scroll: half an octave per press, a semitone per wheel step
+  function scrollChart(d) {
+    VOFF = Math.max(-3600, Math.min(3600, VOFF + d));
+    document.getElementById("vCentre").hidden = VOFF === 0;
+    drawTrace();
+  }
+  document.getElementById("vUp").addEventListener("click", function () { scrollChart(600); });
+  document.getElementById("vDown").addEventListener("click", function () { scrollChart(-600); });
+  document.getElementById("vCentre").addEventListener("click", function () { VOFF = 0; scrollChart(0); });
+  cv.addEventListener("wheel", function (e) {
+    if (!e.deltaY) return;
+    e.preventDefault(); scrollChart(e.deltaY < 0 ? 100 : -100);
+  }, { passive: false });
 
   document.getElementById("vWin").addEventListener("click", function () { VIEW = "win"; updateViewUI(); drawTrace(); });
   document.getElementById("vAll").addEventListener("click", function () { VIEW = "all"; updateViewUI(); drawTrace(); });
