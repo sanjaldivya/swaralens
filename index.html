@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Swara Lens">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<title>Swara Lens</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Mukta:wght@400;500;700&family=Tiro+Devanagari+Hindi&display=swap">
+<style>
+/* Layout: an instrument panel. Tonic + source controls on top, the live swara beside a scrolling pitch trace, then the swara histogram and the note sequence. */
+:root {
+  --bg: #F3F4F9;
+  --surface: #FFFFFF;
+  --ink: #1B1E36;
+  --muted: #5B6080;
+  --line: #DDE0EB;
+  --line-strong: #B4B9CF;
+  --accent: #B95A00;
+  --accent-soft: #FBE8D5;
+  --good: #1E7F55;
+  --chart-bg: #000000;
+  --chart-green: #3DFF7A;
+  --chart-green-dim: #2BA858;
+  --font-display: "Tiro Devanagari Hindi", "Noto Serif Devanagari", Georgia, serif;
+  --font-body: "Mukta", "Noto Sans Devanagari", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10122A; --surface: #181B37; --ink: #ECEDF7; --muted: #A2A7C7;
+    --line: #2A2E52; --line-strong: #474C7A; --accent: #F2A53A; --accent-soft: #3A2D21; --good: #5CC89B;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10122A; --surface: #181B37; --ink: #ECEDF7; --muted: #A2A7C7;
+  --line: #2A2E52; --line-strong: #474C7A; --accent: #F2A53A; --accent-soft: #3A2D21; --good: #5CC89B;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+header.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+h1 { font-family: var(--font-display); font-weight: 400; font-size: 2.1rem; line-height: 1.1; margin: 0; letter-spacing: -0.01em; }
+h1 .dev { color: var(--accent); margin-left: .25em; }
+header.top p { margin: 0; color: var(--muted); }
+h2 { font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.field { display: flex; flex-direction: column; gap: 2px; }
+.field > label, .field > span { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.btn { font: inherit; font-weight: 500; font-size: .95rem; border-radius: 8px; padding: 8px 14px; cursor: pointer;
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select, input[type=range] { font: inherit; font-size: .95rem; }
+select { border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 8px; background: var(--surface); color: var(--ink); }
+input[type=range] { accent-color: var(--accent); width: 130px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tune-val { font-size: .8rem; color: var(--muted); min-width: 4.5ch; display: inline-block; }
+
+.status { margin: 0; color: var(--muted); font-size: .95rem; min-height: 1.5em; }
+.status.err { color: var(--accent); }
+
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat-k { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.stat-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.stat-v { font-size: 1.9rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.stat-v small { font-size: .9rem; font-weight: 500; color: var(--muted); margin-left: 4px; }
+.stat-s { font-size: .85rem; color: var(--muted); }
+.btn.small { padding: 3px 10px; font-size: .82rem; }
+@media (max-width: 760px) { .stats { grid-template-columns: minmax(0, 1fr); gap: 10px; } .stat-v { font-size: 1.6rem; } }
+.grid { display: grid; grid-template-columns: minmax(0, 290px) minmax(0, 1fr); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tag { font-size: .72rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.full { grid-column: 1 / -1; }
+
+/* Now singing */
+.now { align-items: center; text-align: center; }
+.now h2 { align-self: stretch; text-align: left; }
+.big { font-family: var(--font-display); font-size: 5.4rem; line-height: 1; min-height: 1.35em; display: flex; align-items: center; justify-content: center; transition: opacity .15s; }
+.big.roman { font-family: var(--font-body); font-weight: 700; font-size: 4.4rem; }
+.big.idle { opacity: .28; }
+.sub { color: var(--muted); font-size: 1rem; margin-top: -6px; }
+.meter { width: 100%; padding: 4px 4px 0; }
+.meter-track { position: relative; height: 34px; border-bottom: 1px solid var(--line-strong); }
+.meter-tick { position: absolute; bottom: 0; width: 1px; background: var(--line-strong); height: 8px; }
+.meter-tick.mid { height: 18px; background: var(--muted); }
+.meter-zone { position: absolute; bottom: 0; height: 100%; background: var(--accent-soft); opacity: .6; left: 40%; width: 20%; }
+.needle { position: absolute; bottom: 0; width: 3px; margin-left: -1.5px; height: 30px; border-radius: 2px; background: var(--accent); left: 50%; transition: left .08s linear; }
+.needle.ok { background: var(--good); }
+.needle[hidden] { display: none !important; }
+.meter-labels { display: flex; justify-content: space-between; font-size: .72rem; color: var(--muted); padding-top: 3px; }
+.readout { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0; }
+.readout div { display: flex; flex-direction: column; gap: 0; }
+.readout dt { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.readout dd { margin: 0; font-size: 1rem; }
+
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: .8rem; font-weight: 500; padding: 4px 10px; border: 0; background: var(--surface); color: var(--muted); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line-strong); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.pan { display: flex; align-items: center; gap: 10px; font-size: .85rem; color: var(--muted); }
+.pan input { flex: 1; width: auto; min-width: 0; }
+.canvas-wrap { position: relative; width: 100%; height: 340px; background: var(--chart-bg); border-radius: 8px; overflow: hidden; }
+canvas { display: block; width: 100%; height: 100%; }
+
+/* Histogram */
+.bars { background: var(--chart-bg); border-radius: 8px; padding: 14px 10px 10px; color: var(--chart-green); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; align-items: end; }
+.bar-col { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.bar-track { width: 100%; height: 130px; display: flex; align-items: flex-end; border-bottom: 1px solid #2F7A47; }
+.bar { width: 100%; border-radius: 4px 4px 0 0; background: var(--chart-green); min-height: 0; transition: height .25s; }
+.bar.alt { background: var(--chart-green); opacity: .45; }
+.bar-val { font-size: .72rem; color: var(--chart-green-dim); }
+.bar-lab { font-size: 1rem; }
+
+/* Swara notation */
+.sw { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.05; vertical-align: middle; }
+.sw .nm { position: relative; }
+.sw.komal .nm { text-decoration: underline; text-decoration-thickness: .07em; text-underline-offset: .18em; }
+.sw.tivra .nm::before { content: ""; position: absolute; left: 50%; top: -.22em; width: max(1.5px, .07em); height: .3em; background: currentColor; transform: translateX(-50%); }
+.sw .up, .sw .dn { display: block; width: .2em; height: .2em; min-width: 3px; min-height: 3px; border-radius: 50%; background: currentColor; }
+.sw .up { margin-bottom: .08em; }
+.sw .dn { margin-top: .12em; }
+.sw.ph .up, .sw.ph .dn { visibility: hidden; }
+
+.seq { display: flex; flex-wrap: wrap; gap: 6px; min-height: 48px; align-content: flex-start; }
+.chip { font-size: 1.05rem; padding: 4px 9px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); }
+.chip.last { border-color: var(--accent); background: var(--accent-soft); }
+.empty { color: var(--muted); font-size: .95rem; }
+
+.notes { color: var(--muted); font-size: .88rem; max-width: 72ch; margin: 0; }
+.notes b { color: var(--ink); font-weight: 600; }
+
+@media (max-width: 760px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .canvas-wrap { height: 300px; }
+  .bars { gap: 3px; }
+  .bar-track { height: 100px; }
+  .bar-val { font-size: .62rem; }
+  .bar-lab { font-size: .85rem; }
+  .big { font-size: 4.6rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .needle, .bar, .big { transition: none; }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Swara Lens<span class="dev">स्वर</span></h1>
+    <p>Listens to the melody, finds its pitch and names the swara against your Sa.</p>
+  </header>
+
+  <section class="controls" aria-label="Controls">
+    <div class="group">
+      <button id="btnDemo" class="btn primary" type="button">▶ Play demo scale</button>
+      <label class="btn" for="fileIn" tabindex="0" id="fileLabel" title="Or drag a song onto the page">Open song file</label>
+      <input type="file" id="fileIn" hidden>
+      <button id="btnMic" class="btn" type="button">Microphone</button>
+      <button id="btnStop" class="btn" type="button" disabled>■ Stop</button>
+      <button id="btnResume" class="btn primary" type="button" hidden>▶ Tap to start playback</button>
+    </div>
+    <div class="group">
+      <div class="field">
+        <label for="saNote">Sa (tonic)</label>
+        <div class="group">
+          <select id="saNote" aria-label="Sa note"></select>
+          <select id="saOct" aria-label="Sa octave">
+            <option value="2">Octave 2</option>
+            <option value="3">Octave 3</option>
+            <option value="4" selected>Octave 4</option>
+            <option value="5">Octave 5</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="tune">Fine tune</label>
+        <div class="group"><input type="range" id="tune" min="-50" max="50" step="1" value="0"><span id="tuneVal" class="tune-val mono">0¢</span></div>
+      </div>
+      <div class="field">
+        <label for="script">Script</label>
+        <select id="script">
+          <option value="r">Sa Re Ga</option>
+          <option value="d">सा रे ग</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <p id="status" class="status err" role="status">The app hasn't started in this window. If the Edge address bar shows an Internet Explorer icon, this page is in IE mode, which can't run it: copy the file path into a new normal Edge tab. If you are looking at a preview inside another app, open the page's web address in Safari, Chrome or Edge instead.</p>
+
+  <section class="stats" aria-label="Pitch and tempo">
+    <div class="stat">
+      <span class="stat-k">Pitch now</span>
+      <span class="stat-v mono" id="pNote">—</span>
+      <span class="stat-s" id="pHz">Western note of the current sound</span>
+    </div>
+    <div class="stat">
+      <div class="stat-row"><span class="stat-k">Song pitch (scale)</span><button id="btnUseSa" class="btn small" type="button" disabled>Use as Sa</button></div>
+      <span class="stat-v" id="kKey">—</span>
+      <span class="stat-s" id="kSub">Estimated from the notes heard</span>
+    </div>
+    <div class="stat">
+      <span class="stat-k">Tempo</span>
+      <span class="stat-v mono" id="bpm">—</span>
+      <span class="stat-s" id="bpmSub">Beats per minute</span>
+    </div>
+  </section>
+
+  <main class="grid">
+    <section class="card now" aria-label="Current swara">
+      <h2>Now singing</h2>
+      <div id="big" class="big idle"></div>
+      <div id="sub" class="sub">&nbsp;</div>
+      <div class="meter" aria-hidden="true">
+        <div class="meter-track" id="meterTrack">
+          <div class="meter-zone"></div>
+          <div id="needle" class="needle" hidden></div>
+        </div>
+        <div class="meter-labels mono"><span>−50¢</span><span>flat · in tune · sharp</span><span>+50¢</span></div>
+      </div>
+      <dl class="readout">
+        <div><dt>Frequency</dt><dd id="hz" class="mono">—</dd></div>
+        <div><dt>Offset</dt><dd id="cents" class="mono">—</dd></div>
+        <div><dt>Saptak</dt><dd id="saptak">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="card" aria-label="Pitch trace">
+      <div class="card-head"><h2>Pitch trace</h2>
+        <div class="head-right">
+          <div class="seg" role="group" aria-label="Trace view">
+            <button type="button" id="vWin" aria-pressed="true">Last 12 s</button>
+            <button type="button" id="vAll" aria-pressed="false">Whole song</button>
+          </div>
+          <span class="tag" id="traceTag">Example</span>
+        </div>
+      </div>
+      <div class="canvas-wrap"><canvas id="trace"></canvas></div>
+      <div class="pan" id="panWrap" hidden><label for="pan">Scroll</label><input type="range" id="pan" min="0" max="0" step="0.1" value="0"><span id="panVal" class="mono"></span></div>
+    </section>
+
+    <section class="card full" aria-label="Time on each swara">
+      <div class="card-head"><h2>Time on each swara (all octaves)</h2><span class="mono" id="total" style="font-size:.8rem;color:var(--muted)"></span></div>
+      <div id="bars" class="bars"></div>
+    </section>
+
+    <section class="card full" aria-label="Swara sequence">
+      <div class="card-head"><h2>Swara sequence</h2><button id="btnCopy" class="btn" type="button" style="padding:4px 10px;font-size:.85rem">Copy</button></div>
+      <div id="seq" class="seq"></div>
+    </section>
+  </main>
+
+  <p class="notes"><b>How it maps:</b> each pitch is measured in cents from your Sa and rounded to the nearest of the 12 swaras. Shuddha swaras are shown plain, komal swaras underlined (<span class="sw komal"><span class="nm">Re</span></span>), tivra Ma with a tick (<span class="sw tivra"><span class="nm">Ma</span></span>), mandra saptak with a dot below and taar saptak with a dot above. Set Sa to the song's tonic; changing it relabels everything already captured. Pitch tracking follows one melody line, so a solo voice or instrument works best. With heavy accompaniment it follows whatever is loudest.</p>
+</div>
+
+<script>
+window.__swErr = function (msg) {
+  var el = document.getElementById("status");
+  if (el) { el.className = "status err"; el.textContent = msg; }
+};
+window.onerror = function (m, src, line) {
+  window.__swErr("Something went wrong: " + m + (line ? " (line " + line + ")" : "") + ". Please send me this message.");
+};
+if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !Array.prototype.fill) {
+  window.__swErr("This browser view can't run Swara Lens (no Web Audio support). If Edge shows an Internet Explorer icon in the address bar, it is in IE mode: copy the address into a new normal Edge tab.");
+}
+</script>
+<script>
+(function () {
+  "use strict";
+  var NOTE_NAMES = ["C", "C♯ / D♭", "D", "D♯ / E♭", "E", "F", "F♯ / G♭", "G", "G♯ / A♭", "A", "A♯ / B♭", "B"];
+  var SW = [
+    { r: "Sa", d: "सा", t: "s" }, { r: "Re", d: "रे", t: "k" }, { r: "Re", d: "रे", t: "s" },
+    { r: "Ga", d: "ग", t: "k" }, { r: "Ga", d: "ग", t: "s" }, { r: "Ma", d: "म", t: "s" },
+    { r: "Ma", d: "म", t: "t" }, { r: "Pa", d: "प", t: "s" }, { r: "Dha", d: "ध", t: "k" },
+    { r: "Dha", d: "ध", t: "s" }, { r: "Ni", d: "नि", t: "k" }, { r: "Ni", d: "नि", t: "s" }
+  ];
+  var SAPTAK = { "-2": "Ati-mandra", "-1": "Mandra", "0": "Madhya", "1": "Taar", "2": "Ati-taar" };
+  var WIN = 12, MIN_FRAMES = 6;
+
+  var S = {
+    saNote: 0, saOct: 4, tune: 0, script: "r",
+    points: [], hist: new Float64Array(120), seq: [], example: true,
+    seg: { key: null, count: 0, sum: 0, emitted: null, lastVoiced: -10 }
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var els = {
+    big: $("big"), sub: $("sub"), needle: $("needle"), hz: $("hz"), cents: $("cents"), saptak: $("saptak"),
+    bars: $("bars"), seq: $("seq"), status: $("status"), tag: $("traceTag"), total: $("total"),
+    btnDemo: $("btnDemo"), btnMic: $("btnMic"), btnStop: $("btnStop"), fileIn: $("fileIn"), fileLabel: $("fileLabel"),
+    saNote: $("saNote"), saOct: $("saOct"), tune: $("tune"), tuneVal: $("tuneVal"), script: $("script"), cv: $("trace")
+  };
+
+  NOTE_NAMES.forEach(function (n, i) {
+    var o = document.createElement("option"); o.value = i; o.textContent = n; els.saNote.appendChild(o);
+  });
+
+  // ---------- music maths ----------
+  function saMidi() { return 12 * (S.saOct + 1) + S.saNote + S.tune / 100; }
+  function midiToHz(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+  function rel(m) {
+    var c = (m - saMidi()) * 100, k = Math.round(c / 100);
+    return { k: k, idx: ((k % 12) + 12) % 12, oct: Math.floor(k / 12), dev: c - 100 * k, cents: c };
+  }
+  var SHORT = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+  var KATTAI = ["Safed 1", "Kaali 1", "Safed 2", "Kaali 2", "Safed 3", "Safed 4", "Kaali 3", "Safed 5", "Kaali 4", "Safed 6", "Kaali 5", "Safed 7"];
+  function noteName(m) { var r = Math.round(m); return SHORT[((r % 12) + 12) % 12] + (Math.floor(r / 12) - 1); }
+
+  // song scale: Krumhansl–Schmuckler key profiles against the pitch-class histogram
+  var PMAJ = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+  var PMIN = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+  function corr(a, b) {
+    var ma = 0, mb = 0, i; for (i = 0; i < 12; i++) { ma += a[i]; mb += b[i]; } ma /= 12; mb /= 12;
+    var n = 0, da = 0, db = 0; for (i = 0; i < 12; i++) { n += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) * (a[i] - ma); db += (b[i] - mb) * (b[i] - mb); }
+    return da && db ? n / Math.sqrt(da * db) : 0;
+  }
+  var keyEst = null;
+  function estimateKey() {
+    var pc = new Array(12).fill(0), total = 0;
+    for (var b = 0; b < 120; b++) { if (S.hist[b]) { pc[Math.round((b * 10 + 5) / 100) % 12] += S.hist[b]; total += S.hist[b]; } }
+    if (total < 3) return null;
+    var best = -2, tonic = 0, minor = false;
+    for (var t = 0; t < 12; t++) {
+      var rot = []; for (var i = 0; i < 12; i++) rot.push(pc[(t + i) % 12]);
+      var a = corr(rot, PMAJ), c = corr(rot, PMIN);
+      if (a > best) { best = a; tonic = t; minor = false; }
+      if (c > best) { best = c; tonic = t; minor = true; }
+    }
+    return { tonic: tonic, minor: minor, conf: best };
+  }
+  function renderKey() {
+    keyEst = estimateKey();
+    var btn = document.getElementById("btnUseSa");
+    if (!keyEst) {
+      document.getElementById("kKey").textContent = "—";
+      document.getElementById("kSub").textContent = "Needs a few seconds of melody";
+      btn.disabled = true; return;
+    }
+    document.getElementById("kKey").innerHTML = SHORT[keyEst.tonic] + "<small>" + KATTAI[keyEst.tonic] + "</small>";
+    document.getElementById("kSub").textContent = (keyEst.minor ? "Komal Ga-type scale" : "Shuddha Ga-type scale") + " · " + (keyEst.conf > 0.75 ? "confident" : keyEst.conf > 0.5 ? "likely" : "rough guess");
+    btn.disabled = keyEst.tonic === S.saNote;
+  }
+
+  // tempo: autocorrelation of an onset-strength envelope, with a comb over beat multiples
+  function tempoFrom(on, fps) {
+    var n = on.length, i; if (n < fps * 3) return null;
+    var mean = 0; for (i = 0; i < n; i++) mean += on[i]; mean /= n;
+    var x = new Float32Array(n); for (i = 0; i < n; i++) x[i] = on[i] - mean;
+    var best = 0, bb = null;
+    for (var bpm = 60; bpm <= 200; bpm += 0.5) {
+      var lag = 60 * fps / bpm, s = 0;
+      for (var k = 1; k <= 4; k++) {
+        var L = lag * k; if (L >= n - 2) break;
+        var li = Math.floor(L), fr = L - li, acc = 0;
+        for (i = 0; i + li + 1 < n; i++) acc += x[i] * (x[i + li] * (1 - fr) + x[i + li + 1] * fr);
+        s += acc / (n - L) / k;
+      }
+      s *= Math.exp(-0.5 * Math.pow(Math.log2(bpm / 115) / 0.9, 2));
+      if (s > best) { best = s; bb = bpm; }
+    }
+    return bb;
+  }
+  function fileEnvelope(audio) {
+    var sr = audio.sampleRate, hop = Math.round(sr / 100), N = Math.floor(audio.length / hop), ch = [], c;
+    for (c = 0; c < audio.numberOfChannels; c++) ch.push(audio.getChannelData(c));
+    var env = new Float32Array(N), prevV = 0, prevS = 0, nc = ch.length;
+    for (var f = 0; f < N; f++) {
+      var e = 0;
+      for (var j = 0; j < hop; j++) {
+        var idx = f * hop + j, sm = 0; for (c = 0; c < nc; c++) sm += ch[c][idx];
+        sm /= nc; var d = sm - prevS; prevS = sm; e += d * d;
+      }
+      var v = Math.log(1 + 1e4 * e / hop);
+      env[f] = Math.max(0, v - prevV); prevV = v;
+    }
+    return env;
+  }
+  function showBpm(bpm, sub) {
+    document.getElementById("bpm").innerHTML = bpm ? Math.round(bpm) + "<small>BPM</small>" : "—";
+    document.getElementById("bpmSub").textContent = sub;
+  }
+  var liveEnv = [];
+  function liveTempo(t) {
+    var span = Math.min(12, t); if (span < 4) { showBpm(null, "Listening for the beat…"); return; }
+    var fps = 50, n = Math.floor(span * fps), on = new Float32Array(n), j = 0, t0w = t - span, prev = null;
+    while (j < liveEnv.length && liveEnv[j].t < t0w) j++;
+    for (var i = 0; i < n; i++) {
+      var tt = t0w + i / fps;
+      while (j < liveEnv.length - 1 && liveEnv[j + 1].t <= tt) j++;
+      var v = liveEnv[j] ? liveEnv[j].v : 0;
+      on[i] = prev == null ? 0 : Math.max(0, v - prev); prev = v;
+    }
+    var bpm = tempoFrom(on, fps);
+    showBpm(bpm, bpm ? "Live estimate, last " + Math.round(span) + " s" : "No steady beat yet");
+  }
+
+  function swName(idx) { return S.script === "d" ? SW[idx].d : SW[idx].r; }
+  function swHTML(idx, oct, placeholder) {
+    var s = SW[idx], cls = "sw" + (s.t === "k" ? " komal" : "") + (s.t === "t" ? " tivra" : "") + (placeholder ? " ph" : "");
+    var up = oct > 0 || placeholder ? '<i class="up"></i>' : "";
+    var dn = oct < 0 || placeholder ? '<i class="dn"></i>' : "";
+    return '<span class="' + cls + '">' + up + '<span class="nm">' + swName(idx) + "</span>" + dn + "</span>";
+  }
+  function swText(idx, oct) {
+    var s = SW[idx], n = s.r + (s.t === "k" ? "(k)" : s.t === "t" ? "(t)" : "");
+    if (oct < 0) n = new Array(-oct + 1).join(".") + n;
+    if (oct > 0) n = n + new Array(oct + 1).join("'");
+    return n;
+  }
+
+  // ---------- pitch detection (McLeod normalised square difference) ----------
+  var nsdf = new Float32Array(1100);
+  function detect(x, sr) {
+    var W = 1024, maxTau = Math.min(1020, Math.floor(sr / 55)), minTau = Math.max(2, Math.floor(sr / 1400));
+    var i, tau, rms = 0;
+    for (i = 0; i < W + maxTau; i++) rms += x[i] * x[i];
+    rms = Math.sqrt(rms / (W + maxTau));
+    if (rms < 0.008) return null;
+    var e0 = 0;
+    for (i = 0; i < W; i++) e0 += x[i] * x[i];
+    var e1 = e0;
+    nsdf[0] = 1;
+    for (tau = 1; tau <= maxTau; tau++) {
+      e1 += x[W - 1 + tau] * x[W - 1 + tau] - x[tau - 1] * x[tau - 1];
+      var acf = 0;
+      for (i = 0; i < W; i++) acf += x[i] * x[i + tau];
+      var den = e0 + e1;
+      nsdf[tau] = den > 0 ? 2 * acf / den : 0;
+    }
+    tau = 1;
+    while (tau < maxTau && nsdf[tau] > 0) tau++;
+    var peaks = [], maxv = 0;
+    while (tau < maxTau) {
+      while (tau < maxTau && nsdf[tau] <= 0) tau++;
+      var best = -1, bt = -1;
+      while (tau < maxTau && nsdf[tau] > 0) { if (nsdf[tau] > best) { best = nsdf[tau]; bt = tau; } tau++; }
+      if (bt > 0 && bt < maxTau) { peaks.push(bt); if (best > maxv) maxv = best; }
+    }
+    if (!peaks.length || maxv < 0.82) return null;
+    var p = -1;
+    for (i = 0; i < peaks.length; i++) if (nsdf[peaks[i]] >= 0.9 * maxv && peaks[i] >= minTau) { p = peaks[i]; break; }
+    if (p < 1) return null;
+    var a = nsdf[p - 1], b = nsdf[p], c = nsdf[p + 1], d = a - 2 * b + c;
+    var tf = p + (d !== 0 ? (a - c) / (2 * d) : 0);
+    var f = sr / tf;
+    if (f < 55 || f > 1400) return null;
+    return f;
+  }
+
+  // ---------- data pipeline ----------
+  function resetData() {
+    S.points = []; S.hist = new Float64Array(120); S.seq = []; S.ev = []; S.silStart = null;
+    S.seg = { key: null, count: 0, sum: 0, emitted: null, lastVoiced: -10, t0: 0, note: null };
+  }
+  function processFrame(t, m, dt) {
+    if (m == null) {
+      S.points.push({ t: t, m: null }); S.seg.key = null; S.seg.count = 0;
+      if (S.silStart == null) S.silStart = t;
+      return;
+    }
+    if (S.silStart != null) {
+      var le = S.ev[S.ev.length - 1];
+      if (t - S.silStart >= 0.3 && le && le.m != null) S.ev.push({ t: S.silStart, m: null });
+      S.silStart = null;
+    }
+    S.points.push({ t: t, m: m });
+    var abs = ((m * 100) % 1200 + 1200) % 1200;
+    S.hist[Math.min(119, Math.floor(abs / 10))] += dt;
+    var g = S.seg, key = Math.round(m - saMidi());
+    if (t - g.lastVoiced > 0.25) g.emitted = null;
+    g.lastVoiced = t;
+    if (key === g.key) { g.count++; g.sum += m; } else { g.key = key; g.count = 1; g.sum = m; g.t0 = t; }
+    if (g.count === MIN_FRAMES && key !== g.emitted) {
+      var note = { t: g.t0, m: g.sum / g.count, sum: g.sum, n: g.count };
+      S.seq.push(note); S.ev.push(note); g.note = note; g.emitted = key; seqDirty = true;
+    } else if (g.count > MIN_FRAMES && g.note && key === g.emitted) {
+      g.note.sum += m; g.note.n++; g.note.m = g.note.sum / g.note.n;
+    }
+  }
+
+  // ---------- rendering ----------
+  var seqDirty = true;
+  function showNow(m, hz) {
+    if (m == null) {
+      els.big.classList.add("idle"); els.needle.hidden = true;
+      els.hz.textContent = "—"; els.cents.textContent = "—";
+      if (LIVE) { document.getElementById("pNote").textContent = "—"; document.getElementById("pHz").textContent = "No clear pitch right now"; }
+      return;
+    }
+    var r = rel(m);
+    els.big.classList.remove("idle");
+    els.big.classList.toggle("roman", S.script === "r");
+    els.big.innerHTML = swHTML(r.idx, r.oct);
+    var s = SW[r.idx];
+    els.sub.textContent = (s.t === "k" ? "Komal " : s.t === "t" ? "Tivra " : "Shuddha ") + s.r;
+    els.needle.hidden = false;
+    var dev = Math.max(-50, Math.min(50, r.dev));
+    els.needle.style.left = (50 + dev) + "%";
+    els.needle.classList.toggle("ok", Math.abs(r.dev) <= 10);
+    els.hz.textContent = hz.toFixed(1) + " Hz";
+    var nearest = Math.round(m), dv = Math.round((m - nearest) * 100);
+    document.getElementById("pNote").textContent = noteName(m);
+    document.getElementById("pHz").textContent = hz.toFixed(1) + " Hz · " + (dv >= 0 ? "+" : "−") + Math.abs(dv) + "¢ from " + noteName(m);
+    var rd = Math.round(r.dev); els.cents.textContent = (rd >= 0 ? "+" : "−") + Math.abs(rd) + "¢";
+    els.saptak.textContent = SAPTAK[String(Math.max(-2, Math.min(2, r.oct)))];
+  }
+
+  function renderBars() {
+    var saAbs = ((saMidi() * 100) % 1200 + 1200) % 1200, sums = new Array(12).fill(0), total = 0;
+    for (var b = 0; b < 120; b++) {
+      if (!S.hist[b]) continue;
+      var c = ((b * 10 + 5 - saAbs) % 1200 + 1200) % 1200;
+      sums[Math.round(c / 100) % 12] += S.hist[b]; total += S.hist[b];
+    }
+    var max = Math.max.apply(null, sums) || 1, html = "";
+    for (var i = 0; i < 12; i++) {
+      var pct = total ? sums[i] / total * 100 : 0;
+      html += '<div class="bar-col"><div class="bar-track"><div class="bar' + (SW[i].t === "s" ? "" : " alt") +
+        '" style="height:' + (sums[i] / max * 100).toFixed(1) + '%"></div></div>' +
+        '<div class="bar-val mono">' + (total ? pct.toFixed(0) + "%" : "") + '</div><div class="bar-lab">' + swHTML(i, 0) + "</div></div>";
+    }
+    els.bars.innerHTML = html;
+    els.total.textContent = total ? total.toFixed(1) + " s of pitched sound" : "";
+    renderKey();
+  }
+
+  function renderSeq() {
+    seqDirty = false;
+    if (!S.seq.length) { els.seq.innerHTML = '<span class="empty">Swaras appear here as they are held.</span>'; return; }
+    var start = Math.max(0, S.seq.length - 120), html = start ? '<span class="chip">…</span>' : "";
+    for (var i = start; i < S.seq.length; i++) {
+      var r = rel(S.seq[i].m);
+      html += '<span class="chip' + (i === S.seq.length - 1 ? " last" : "") + '">' + swHTML(r.idx, r.oct) + "</span>";
+    }
+    els.seq.innerHTML = html;
+  }
+
+  // ---------- trace canvas ----------
+  var cv = els.cv, g2 = cv.getContext("2d"), dpr = 1;
+  function sizeCanvas() {
+    dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr);
+    drawTrace();
+  }
+  function colors() {
+    var cs = getComputedStyle(document.documentElement);
+    var v = function (n) { return cs.getPropertyValue(n).trim(); };
+    return { ink: v("--ink"), muted: v("--muted"), line: v("--line"), strong: v("--line-strong"), accent: v("--accent"), bg: v("--surface") };
+  }
+  var LIVE = false, VIEW = "win", panT = null;
+  function updateViewUI() {
+    document.getElementById("vWin").setAttribute("aria-pressed", VIEW === "win" ? "true" : "false");
+    document.getElementById("vAll").setAttribute("aria-pressed", VIEW === "all" ? "true" : "false");
+    var last = S.points.length ? S.points[S.points.length - 1].t : 0, pw = document.getElementById("panWrap"), pan = document.getElementById("pan");
+    var show = !LIVE && VIEW === "win" && last > WIN;
+    pw.hidden = !show;
+    if (show) {
+      pan.max = String(Math.max(0, last - WIN).toFixed(1));
+      if (panT == null || panT > last - WIN) panT = Math.max(0, last - WIN);
+      pan.value = String(panT);
+      document.getElementById("panVal").textContent = fmt(panT) + "–" + fmt(panT + WIN);
+    }
+  }
+  function drawTrace() {
+    var W = cv.clientWidth, H = cv.clientHeight; if (!W || !H) return;
+    var C = { ink: "#3DFF7A", muted: "#2BA858", line: "#173A22", strong: "#2F7A47", accent: "#3DFF7A", bg: "#000000" };
+    g2.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g2.fillStyle = C.bg; g2.fillRect(0, 0, W, H);
+    var L = 56, R = 12, T = 14, B = 26, SIL = 30, lo = -500, hi = 1900;
+    var PB = H - B - SIL, YB = H - B - 9;
+    var y = function (c) { return T + (hi - c) / (hi - lo) * (PB - T); };
+    var fontFam = S.script === "d" ? '"Tiro Devanagari Hindi", serif' : "Mukta, system-ui, sans-serif";
+
+    for (var k = Math.ceil(lo / 100); k <= Math.floor(hi / 100); k++) {
+      var idx = ((k % 12) + 12) % 12, oct = Math.floor(k / 12), yy = Math.round(y(k * 100)) + 0.5, s = SW[idx];
+      g2.beginPath(); g2.moveTo(L, yy); g2.lineTo(W - R, yy);
+      if (idx === 0) { g2.strokeStyle = C.strong; g2.lineWidth = 1.5; g2.setLineDash([]); }
+      else if (s.t === "s") { g2.strokeStyle = C.line; g2.lineWidth = 1; g2.setLineDash([]); }
+      else { g2.strokeStyle = C.line; g2.lineWidth = 1; g2.setLineDash([2, 4]); }
+      g2.stroke(); g2.setLineDash([]);
+      if (s.t === "s") {
+        g2.fillStyle = idx === 0 ? C.ink : C.muted;
+        g2.font = (idx === 0 ? "700 " : "500 ") + "12px " + fontFam;
+        g2.textAlign = "right"; g2.textBaseline = "middle";
+        var label = swName(idx), tx = L - 10;
+        g2.fillText(label, tx, yy);
+        var tw = g2.measureText(label).width, dx = tx - tw / 2;
+        if (oct !== 0) {
+          g2.beginPath(); g2.arc(dx, yy + (oct < 0 ? 8 : -8), 1.6, 0, Math.PI * 2); g2.fill();
+        }
+      }
+    }
+
+    // silence baseline: the trace drops here whenever there is no pitch
+    g2.strokeStyle = "#2F7A47"; g2.lineWidth = 1; g2.setLineDash([4, 4]);
+    g2.beginPath(); g2.moveTo(L, Math.round(YB) + 0.5); g2.lineTo(W - R, Math.round(YB) + 0.5); g2.stroke(); g2.setLineDash([]);
+    g2.fillStyle = C.muted; g2.font = "500 10px Mukta, system-ui, sans-serif"; g2.textAlign = "right"; g2.textBaseline = "middle";
+    g2.fillText("Silence", L - 8, YB);
+
+    var sm = saMidi();
+    var pts = S.points, lastPt = pts.length ? pts[pts.length - 1].t : 0, tStart, tEnd;
+    if (VIEW === "all" && !LIVE) { tStart = 0; tEnd = Math.max(lastPt, 1); }
+    else if (VIEW === "all") { tStart = 0; tEnd = Math.max(lastPt, WIN); }
+    else if (!LIVE && panT != null) { tStart = panT; tEnd = panT + WIN; }
+    else { tEnd = Math.max(WIN, lastPt); tStart = tEnd - WIN; }
+    var span = tEnd - tStart;
+    var PL = L + 8, PR = W - R - 10;
+    var x = function (t) { return PL + (t - tStart) / span * (PR - PL); };
+    var yOf = function (pt) { return pt.m == null ? YB : Math.max(T, Math.min(PB, y((pt.m - sm) * 100))); };
+    var step = span <= 15 ? 2 : span <= 40 ? 5 : span <= 90 ? 10 : span <= 240 ? 30 : 60;
+    var tl = function (v) { v = Math.round(v); return span > 60 || v >= 60 ? Math.floor(v / 60) + ":" + String(v % 60).padStart(2, "0") : v + "s"; };
+
+    g2.fillStyle = C.muted; g2.font = "11px " + '"JetBrains Mono", monospace'; g2.textAlign = "center"; g2.textBaseline = "top";
+    var minor = step / 5;
+    g2.lineWidth = 1; g2.strokeStyle = "#0E2716";
+    for (var mt = Math.ceil(tStart / minor) * minor; mt <= tEnd + 0.001; mt += minor) {
+      var mx = Math.round(x(mt)) + 0.5; g2.beginPath(); g2.moveTo(mx, T); g2.lineTo(mx, H - B); g2.stroke();
+    }
+    for (var tt = Math.ceil(tStart / step) * step; tt <= tEnd + 0.001; tt += step) {
+      var xx = Math.round(x(tt)) + 0.5;
+      g2.strokeStyle = "#245C35"; g2.beginPath(); g2.moveTo(xx, T); g2.lineTo(xx, H - B + 4); g2.stroke();
+      g2.fillText(tl(tt), Math.min(W - 16, Math.max(L + 10, xx)), H - B + 7);
+    }
+
+    g2.save(); g2.beginPath(); g2.rect(L, T - 6, W - L - R, H - B - T + 6); g2.clip();
+    // line graph: one point per held note, silence drops to the baseline
+    var ev = S.ev, e0 = 0, e1 = ev.length;
+    while (e0 < ev.length - 1 && ev[e0 + 1].t < tStart) e0++;
+    while (e1 > 0 && ev[e1 - 1].t > tEnd && e1 - 1 > e0) e1--;
+    if (e1 < ev.length) e1++;
+    var pos = [];
+    for (var ei = e0; ei < e1; ei++) pos.push({ x: x(ev[ei].t), y: yOf(ev[ei]), e: ev[ei] });
+    if (LIVE && lastVoiced && pts.length) {
+      var cp = pts[pts.length - 1]; pos.push({ x: x(cp.t), y: yOf(cp), e: null, live: true });
+    }
+    g2.strokeStyle = C.accent; g2.lineWidth = 2; g2.lineJoin = "round"; g2.lineCap = "round";
+    g2.shadowColor = "rgba(61,255,122,0.6)"; g2.shadowBlur = 5;
+    g2.beginPath();
+    pos.forEach(function (q, qi) { if (qi) g2.lineTo(q.x, q.y); else g2.moveTo(q.x, q.y); });
+    g2.stroke(); g2.shadowBlur = 0;
+    var lastLabelX = -1e9;
+    g2.font = "600 11px " + fontFam; g2.textAlign = "center"; g2.textBaseline = "bottom";
+    pos.forEach(function (q) {
+      if (q.live) {
+        g2.shadowColor = "rgba(61,255,122,0.9)"; g2.shadowBlur = 12; g2.fillStyle = "#B8FFD0";
+        g2.beginPath(); g2.arc(q.x, q.y, 4, 0, Math.PI * 2); g2.fill(); g2.shadowBlur = 0; return;
+      }
+      if (q.e.m == null) {
+        g2.fillStyle = C.muted; g2.beginPath(); g2.arc(q.x, q.y, 2.5, 0, Math.PI * 2); g2.fill(); return;
+      }
+      g2.fillStyle = C.bg; g2.strokeStyle = C.accent; g2.lineWidth = 2;
+      g2.beginPath(); g2.arc(q.x, q.y, 5, 0, Math.PI * 2); g2.fill(); g2.stroke();
+      if (q.x - lastLabelX >= 26) {
+        var r = rel(q.e.m), above = q.y > T + 22, ly = above ? q.y - 9 : q.y + 21;
+        g2.fillStyle = C.ink; g2.fillText(swName(r.idx), q.x, ly);
+        if (r.oct !== 0) { g2.beginPath(); g2.arc(q.x, r.oct > 0 ? ly - 15 : ly + 3, 1.5, 0, Math.PI * 2); g2.fill(); }
+        lastLabelX = q.x;
+      }
+    });
+    g2.restore();
+  }
+
+  // ---------- example data (synthetic arohana / avarohana) ----------
+  function buildExample() {
+    resetData();
+    S.example = true;
+    var notes = [0, 2, 4, 5, 7, 9, 11, 12, 12, 11, 9, 7, 5, 4, 2, 0], dur = 0.7, fps = 60, t = 0, base = saMidi(), prevN = notes[0];
+    notes.forEach(function (n, j) {
+      for (var f = 0; f < dur * fps; f++) {
+        var lt = f / fps;
+        if (lt > dur - 0.06) { processFrame(t, null, 1 / fps); t += 1 / fps; continue; }
+        var glide = lt < 0.05 && j > 0 ? (prevN - n) * (1 - lt / 0.05) : 0;
+        var vib = lt > 0.25 ? 0.1 * Math.sin(2 * Math.PI * 5.5 * lt) : 0;
+        processFrame(t, base + n + glide * 0.6 + vib, 1 / fps);
+        t += 1 / fps;
+      }
+      prevN = n;
+    });
+    lastM = base + 12; lastVoiced = false;
+    showBpm(60 / 0.7, "Example: one note every 0.7 s");
+    document.getElementById("pNote").textContent = noteName(base + 12);
+    document.getElementById("pHz").textContent = midiToHz(base + 12).toFixed(1) + " Hz · example";
+    els.tag.textContent = "Example";
+    setStatus("Showing an example: the shuddha scale Sa → Sa' and back. Play the demo, open a song file or use the microphone to start listening.");
+  }
+
+  // ---------- audio sessions ----------
+  var ctx = null, analyser = null, buf = null, src = null, micStream = null, raf = 0, t0 = 0, lastT = 0, med = [], frame = 0;
+  var lastM = null, lastVoiced = false, mode = null, fileDur = 0, fileName = "";
+
+  function setStatus(msg, err) { els.status.textContent = msg; els.status.classList.toggle("err", !!err); }
+  function ensureCtx() {
+    if (!ctx) {
+      try { ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (e) { window.__swErr("Edge couldn't start audio here (" + e.message + "). Try a new normal Edge tab, or the Swara Lens link."); throw e; }
+    }
+    if (ctx.state === "suspended") { try { ctx.resume(); } catch (e) {} }
+    try {
+      var sb = ctx.createBuffer(1, 1, 22050), ss = ctx.createBufferSource();
+      ss.buffer = sb; ss.connect(ctx.destination); ss.start(0);
+    } catch (e) {}
+    return ctx;
+  }
+  function begin(newMode, tag) {
+    stopAudio(true);
+    ensureCtx();
+    analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0;
+    buf = new Float32Array(analyser.fftSize);
+    resetData(); S.example = false; seqDirty = true;
+    liveEnv = []; showBpm(null, newMode === "file" ? "Working out the tempo…" : "Listening for the beat…");
+    document.getElementById("pNote").textContent = "—";
+    mode = newMode; LIVE = true; VIEW = "win"; panT = null; updateViewUI(); t0 = ctx.currentTime; lastT = 0; med = []; frame = 0;
+    els.tag.textContent = tag;
+    els.btnStop.disabled = false;
+    renderBars(); renderSeq();
+    raf = requestAnimationFrame(loop);
+  }
+  function median(a) { var s = a.slice().sort(function (p, q) { return p - q; }); return s[s.length >> 1]; }
+  function fmt(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+
+  function loop() {
+    if (!LIVE) return;
+    analyser.getFloatTimeDomainData(buf);
+    var t = ctx.currentTime - t0, dt = Math.min(0.1, Math.max(0, t - lastT)); lastT = t;
+    var f = detect(buf, ctx.sampleRate), m = null, hz = 0;
+    if (f) {
+      med.push(f); if (med.length > 3) med.shift();
+      hz = median(med); m = 69 + 12 * Math.log2(hz / 440);
+    } else med.length = 0;
+    processFrame(t, m, dt);
+    lastVoiced = m != null; if (m != null) lastM = m;
+    showNow(m, hz);
+    drawTrace();
+    if (mode !== "file") {
+      var en = 0, pv = buf[0]; for (var q2 = 1; q2 < buf.length; q2++) { var dd = buf[q2] - pv; pv = buf[q2]; en += dd * dd; }
+      liveEnv.push({ t: t, v: Math.log(1 + 1e4 * en / buf.length) });
+      if (liveEnv.length > 1500) liveEnv.splice(0, liveEnv.length - 1500);
+      if (frame % 30 === 0) liveTempo(t);
+    }
+    if (++frame % 12 === 0) renderBars();
+    if (seqDirty) renderSeq();
+    if (mode === "mic" && frame % 10 === 0) {
+      var e2 = 0; for (var q = 0; q < buf.length; q++) e2 += buf[q] * buf[q];
+      var lvl = Math.min(10, Math.round(Math.sqrt(e2 / buf.length) * 100));
+      setStatus("Listening · input level " + "▮".repeat(lvl) + "▯".repeat(10 - lvl) + (lvl < 1 ? "  (very quiet: move closer or raise the mic volume in Windows Sound settings)" : ""));
+    }
+    if (frame % 20 === 0) checkRunning();
+    if (mode === "file" && frame % 15 === 0 && ctx.state !== "running") setStatus("The browser paused the sound. Tap “Tap to start playback”.");
+    else if (mode === "file" && frame % 15 === 0) setStatus("Playing " + fileName + " · " + fmt(t) + " / " + fmt(fileDur));
+    raf = requestAnimationFrame(loop);
+  }
+
+  function stopAudio(silent) {
+    LIVE = false; cancelAnimationFrame(raf);
+    if (src) { try { src.onended = null; src.stop(); } catch (e) {} try { src.disconnect(); } catch (e) {} src = null; }
+    if (micStream) { micStream.getTracks().forEach(function (tr) { tr.stop(); }); micStream = null; }
+    if (analyser) { try { analyser.disconnect(); } catch (e) {} }
+    els.btnStop.disabled = true;
+    lastVoiced = false;
+    var br = document.getElementById("btnResume"); if (br) br.hidden = true;
+    if (!silent) {
+      showNow(null); drawTrace(); renderBars(); renderSeq();
+      if (mode) els.tag.textContent = "Stopped";
+      mode = null;
+    }
+  }
+
+  function finished(msg) {
+    var lp = S.points[S.points.length - 1];
+    if (lp && lp.m != null) S.points.push({ t: lp.t + 0.05, m: null });
+    var le2 = S.ev[S.ev.length - 1];
+    if (le2 && le2.m != null && lp) S.ev.push({ t: lp.t + 0.05, m: null });
+    LIVE = false; VIEW = "all"; panT = null; updateViewUI(); stopAudio(); setStatus(msg + " Change Sa to relabel what was captured."); }
+
+  els.btnDemo.addEventListener("click", function () {
+    begin("demo", "Demo");
+    var o = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain(), g2b = ctx.createGain(), out = ctx.createGain();
+    o.type = "triangle"; o2.type = "sine"; g2b.gain.value = 0.3; out.gain.value = 0.7;
+    o.connect(g); o2.connect(g2b); g2b.connect(g); g.connect(analyser); analyser.connect(out); out.connect(ctx.destination);
+    var notes = [0, 2, 4, 5, 7, 9, 11, 12, 12, 11, 9, 7, 5, 4, 2, 0], dur = 0.6, st = ctx.currentTime + 0.05, base = saMidi();
+    g.gain.setValueAtTime(0, st);
+    notes.forEach(function (n, j) {
+      var s = st + j * dur, fq = midiToHz(base + n);
+      o.frequency.setValueAtTime(fq, s); o2.frequency.setValueAtTime(fq * 2, s);
+      g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(0.35, s + 0.03);
+      g.gain.setValueAtTime(0.35, s + dur - 0.09); g.gain.linearRampToValueAtTime(0, s + dur - 0.03);
+    });
+    var end = st + notes.length * dur;
+    o.start(st); o2.start(st); o.stop(end); o2.stop(end);
+    src = o;
+    o.onended = function () { finished("Demo finished."); };
+    setStatus("Playing a synthesised shuddha scale on Sa = " + NOTE_NAMES[S.saNote].split(" ")[0] + S.saOct + ".");
+  });
+
+  els.fileLabel.addEventListener("click", function () { ensureCtx(); });
+  els.fileLabel.addEventListener("touchend", function () { ensureCtx(); }, { passive: true });
+  var btnResume = document.getElementById("btnResume");
+  btnResume.addEventListener("click", function () {
+    ensureCtx();
+    ctx.resume().then(function () { btnResume.hidden = true; }, function () {});
+  });
+  function checkRunning() {
+    if (!ctx) return;
+    btnResume.hidden = !(LIVE && ctx.state !== "running");
+  }
+  els.fileLabel.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); els.fileIn.click(); } });
+  els.fileIn.addEventListener("change", function () {
+    var file = els.fileIn.files && els.fileIn.files[0]; els.fileIn.value = "";
+    if (file) loadFile(file);
+  });
+  document.addEventListener("dragover", function (e) { e.preventDefault(); });
+  document.addEventListener("drop", function (e) {
+    e.preventDefault();
+    var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) loadFile(file);
+  });
+  function loadFile(file) {
+    ensureCtx();
+    setStatus("Reading " + file.name + "…");
+    file.arrayBuffer().then(function (ab) {
+      return new Promise(function (res, rej) { ctx.decodeAudioData(ab, res, rej); });
+    }).then(function (audio) {
+      fileName = file.name; fileDur = audio.duration;
+      begin("file", "Song");
+      var b = ctx.createBufferSource(); b.buffer = audio;
+      b.connect(analyser); analyser.connect(ctx.destination);
+      t0 = ctx.currentTime + 0.05; b.start(t0);
+      src = b;
+      b.onended = function () { finished("Finished " + fileName + "."); };
+      setTimeout(function () {
+        try {
+          var fb = tempoFrom(fileEnvelope(audio), 100);
+          showBpm(fb, fb ? "Whole song" : "No steady beat found");
+        } catch (e) { showBpm(null, "Couldn't work out the tempo"); }
+      }, 30);
+      setStatus("Playing " + fileName + " · 0:00 / " + fmt(fileDur));
+    }).catch(function () {
+      setStatus("Couldn't read that file. Try an MP3, WAV, M4A or OGG audio file.", true);
+    });
+  }
+
+  els.btnMic.addEventListener("click", function () {
+    ensureCtx();
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus("The browser only allows the microphone on pages opened from your own computer (file:///…) or an https:// site. Save this file to your Downloads or Desktop and double-click it, rather than opening it from a network drive or email preview.", true); return;
+    }
+    setStatus("Asking for microphone access… look for the prompt near the address bar.");
+    var getMic = function () {
+      return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+        .catch(function (e) {
+          if (e && (e.name === "OverconstrainedError" || e.name === "TypeError")) return navigator.mediaDevices.getUserMedia({ audio: true });
+          throw e;
+        });
+    };
+    getMic()
+      .then(function (stream) {
+        ensureCtx();
+        begin("mic", "Mic");
+        micStream = stream;
+        src = ctx.createMediaStreamSource(stream); src.connect(analyser);
+        setStatus("Listening to the microphone. Sing or play near it; press Stop when done.");
+      })
+      .catch(function (e) {
+        var n = e && e.name, msg;
+        if (n === "NotAllowedError" || n === "SecurityError" || n === "PermissionDeniedError") {
+          msg = "Microphone access was blocked. In Edge, click the icon at the left of the address bar, set Microphone to Allow, then reload the page. If it is still blocked, open Windows Settings › Privacy & security › Microphone and turn on both 'Microphone access' and 'Let desktop apps access your microphone'.";
+        } else if (n === "NotFoundError" || n === "DevicesNotFoundError") {
+          msg = "No microphone was found. Plug one in or check it is enabled in Windows Sound settings, then try again.";
+        } else if (n === "NotReadableError" || n === "TrackStartError" || n === "AbortError") {
+          msg = "The microphone is busy or couldn't start. Close apps that may be using it (Teams, Zoom, Discord) and try again.";
+        } else {
+          msg = "The microphone couldn't start (" + (n || "unknown error") + (e && e.message ? ": " + e.message : "") + ").";
+        }
+        setStatus(msg, true);
+      });
+  });
+
+  els.btnStop.addEventListener("click", function () { finished("Stopped."); });
+
+  function remapAll() {
+    els.tuneVal.textContent = (S.tune > 0 ? "+" : S.tune < 0 ? "−" : "") + Math.abs(S.tune) + "¢";
+    if (S.example && !LIVE) { buildExample(); }
+    seqDirty = true; renderSeq(); renderBars(); drawTrace();
+    if (!LIVE) showNow(lastM, lastM ? midiToHz(lastM) : 0);
+    if (!LIVE) els.big.classList.add("idle");
+  }
+  document.getElementById("vWin").addEventListener("click", function () { VIEW = "win"; updateViewUI(); drawTrace(); });
+  document.getElementById("vAll").addEventListener("click", function () { VIEW = "all"; updateViewUI(); drawTrace(); });
+  document.getElementById("pan").addEventListener("input", function () {
+    panT = +this.value; document.getElementById("panVal").textContent = fmt(panT) + "–" + fmt(panT + WIN); drawTrace();
+  });
+
+  els.saNote.addEventListener("change", function () { S.saNote = +els.saNote.value; remapAll(); });
+  els.saOct.addEventListener("change", function () { S.saOct = +els.saOct.value; remapAll(); });
+  els.tune.addEventListener("input", function () { S.tune = +els.tune.value; remapAll(); });
+  els.script.addEventListener("change", function () { S.script = els.script.value; remapAll(); });
+
+  document.getElementById("btnUseSa").addEventListener("click", function () {
+    if (!keyEst) return;
+    var ms = S.points.filter(function (p) { return p.m != null; }).map(function (p) { return p.m; }).sort(function (a, b) { return a - b; });
+    var med = ms.length ? ms[ms.length >> 1] : saMidi();
+    var oct = Math.floor((med - keyEst.tonic) / 12) - 1;
+    S.saNote = keyEst.tonic; S.saOct = Math.max(2, Math.min(5, oct)); S.tune = 0;
+    els.saNote.value = String(S.saNote); els.saOct.value = String(S.saOct); els.tune.value = "0";
+    var wasExample = S.example; S.example = false;
+    remapAll(); S.example = wasExample;
+    setStatus("Sa set to " + SHORT[S.saNote] + S.saOct + " (" + KATTAI[S.saNote] + "). Everything captured has been relabelled.");
+  });
+
+  $("btnCopy").addEventListener("click", function () {
+    var txt = S.seq.map(function (nt) { var r = rel(nt.m); return swText(r.idx, r.oct); }).join(" ");
+    var btn = this;
+    if (!txt) return;
+    var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1400); };
+    try {
+      navigator.clipboard.writeText(txt).then(done, function () { selectSeq(); });
+    } catch (e) { selectSeq(); }
+  });
+  function selectSeq() {
+    var r = document.createRange(); r.selectNodeContents(els.seq);
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    setStatus("Sequence selected. Press Ctrl+C or ⌘C to copy.");
+  }
+
+  // theme changes repaint the canvas
+  try {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawTrace);
+    new MutationObserver(drawTrace).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  } catch (e) {}
+  if (window.ResizeObserver) new ResizeObserver(sizeCanvas).observe(cv); else window.addEventListener("resize", sizeCanvas);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { drawTrace(); });
+
+  // boot
+  els.saNote.value = String(S.saNote);
+  buildExample();
+  showNow(lastM, midiToHz(lastM)); els.big.classList.add("idle");
+  renderBars(); renderSeq(); sizeCanvas();
+  if (els.status.textContent.indexOf("hasn't started") > -1 || !els.status.textContent) setStatus("Ready.");
+})();
+</script>
+
+<script>
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js").catch(function () {}); });
+}
+</script>
+</html>
