@@ -295,7 +295,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     { r: "Dha", d: "ध", t: "s" }, { r: "Ni", d: "नि", t: "k" }, { r: "Ni", d: "नि", t: "s" }
   ];
   var SAPTAK = { "-2": "Ati-mandra", "-1": "Mandra", "0": "Madhya", "1": "Taar", "2": "Ati-taar" };
-  var WIN = 12, MIN_DUR = 0.05, MIN_HITS = 4, REART_GAP = 0.06, CUR_HOLD = 0.15;
+  var WIN = 12, MIN_DUR = 0.07, MIN_HITS = 5, REART_GAP = 0.06, CUR_HOLD = 0.15;
 
   var S = {
     saNote: 0, saOct: 4, tune: 0, script: "r",
@@ -599,6 +599,14 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     g2.setTransform(dpr, 0, 0, dpr, 0, 0);
     g2.fillStyle = C.bg; g2.fillRect(0, 0, W, H);
     var L = 56, R = 12, T = 14, B = 26, SIL = 30, lo = -500, hi = 1900;
+    // widen the range to fit every note heard (up to two octaves either side of Sa)
+    var saM = saMidi();
+    for (var ei = 0; ei < S.ev.length; ei++) {
+      var em = S.ev[ei].m; if (em == null) continue;
+      var ec = (em - saM) * 100;
+      if (ec - 100 < lo) lo = Math.max(-2400, Math.floor((ec - 100) / 100) * 100);
+      if (ec + 100 > hi) hi = Math.min(2400, Math.ceil((ec + 100) / 100) * 100);
+    }
     var PB = H - B - SIL, YB = H - B - 9;
     var y = function (c) { return T + (hi - c) / (hi - lo) * (PB - T); };
     var fontFam = S.script === "d" ? '"Tiro Devanagari Hindi", serif' : "Mukta, system-ui, sans-serif";
@@ -610,7 +618,9 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       else if (s.t === "s") { g2.strokeStyle = C.line; g2.lineWidth = 1; g2.setLineDash([]); }
       else { g2.strokeStyle = C.line; g2.lineWidth = 1; g2.setLineDash([2, 4]); }
       g2.stroke(); g2.setLineDash([]);
-      if (s.t === "s") {
+      var pxSemi = (PB - T) / ((hi - lo) / 100);
+      var showLabel = s.t === "s" && (pxSemi >= 9 || idx === 0 || idx === 7 || (pxSemi >= 6 && (idx === 4 || idx === 9)));
+      if (showLabel) {
         g2.fillStyle = idx === 0 ? C.ink : C.muted;
         g2.font = (idx === 0 ? "700 " : "500 ") + "12px " + fontFam;
         g2.textAlign = "right"; g2.textBaseline = "middle";
@@ -736,12 +746,12 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
   function begin(newMode, tag) {
     stopAudio(true);
     ensureCtx();
-    analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0;
+    analyser = ctx.createAnalyser(); analyser.fftSize = MEL.N; analyser.smoothingTimeConstant = 0;
     buf = new Float32Array(analyser.fftSize);
     resetData(); S.example = false; seqDirty = true;
     liveEnv = []; showBpm(null, newMode === "file" ? "Working out the tempo…" : "Listening for the beat…");
     document.getElementById("pNote").textContent = "—";
-    fileMono = null;
+    fileMono = null; MEL.reset(ctx.sampleRate);
     mode = newMode; LIVE = true; VIEW = "win"; panT = null; updateViewUI(); t0 = ctx.currentTime; lastT = 0; med = []; frame = 0;
     els.tag.textContent = tag;
     els.btnStop.disabled = false;
@@ -751,33 +761,326 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
   function median(a) { var s = a.slice().sort(function (p, q) { return p - q; }); return s[s.length >> 1]; }
   function fmt(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
 
+  // ---------- melody picker: one line out of a full mix ----------
+  // 1. Harmonic/percussive separation removes drums, claps and beat loops.
+  // 2. Harmonic-sum salience finds every pitched line sounding at once.
+  // 3. Each line is tracked over time and sorted by how it behaves:
+  //    voice (pitch never quite still: vibrato, gamaka), wind (near-pure tone),
+  //    plucked strings (sharp attack, then a steady die-away), steady (keys, bowed pads).
+  // 4. Priority: voice > wind > steady > plucked strings.
+  var MEL = (function () {
+    var N = 4096, HALF = N / 2 + 1, LA = 8;
+    var cosT = new Float32Array(N / 2), sinT = new Float32Array(N / 2), rev = new Uint32Array(N), win = new Float32Array(N);
+    (function () {
+      var i, b, bits = Math.round(Math.log(N) / Math.LN2);
+      for (i = 0; i < N / 2; i++) { cosT[i] = Math.cos(2 * Math.PI * i / N); sinT[i] = -Math.sin(2 * Math.PI * i / N); }
+      for (i = 0; i < N; i++) { var r = 0, x = i; for (b = 0; b < bits; b++) { r = (r << 1) | (x & 1); x >>= 1; } rev[i] = r; }
+      for (i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1));
+    })();
+    var re = new Float32Array(N), im = new Float32Array(N);
+    function spectrum(x, out) {
+      var i, size, st, j, k;
+      for (i = 0; i < N; i++) { re[rev[i]] = x[i] * win[i]; im[rev[i]] = 0; }
+      for (size = 2; size <= N; size <<= 1) {
+        var half = size >> 1, step = N / size;
+        for (st = 0; st < N; st += size) {
+          for (j = 0, k = 0; j < half; j++, k += step) {
+            var a = st + j, b2 = a + half;
+            var tr = re[b2] * cosT[k] - im[b2] * sinT[k], ti = re[b2] * sinT[k] + im[b2] * cosT[k];
+            re[b2] = re[a] - tr; im[b2] = im[a] - ti; re[a] += tr; im[a] += ti;
+          }
+        }
+      }
+      for (k = 0; k < HALF; k++) out[k] = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+    }
+    var tmp = new Float32Array(64), tmp2 = new Float32Array(64);
+    function med(a, n) {
+      for (var i = 1; i < n; i++) { var v = a[i], j = i - 1; while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; j--; } a[j + 1] = v; }
+      return n ? a[n >> 1] : 0;
+    }
+
+    var sr = 44100, binHz = sr / N, lo = 4, hi = 232, ring = [], pool = [], X = new Float32Array(HALF);
+    var gridF = [], sal = null, contours = [], recent = [], holdPri = 0, holdT = -9, chosen = null, challenger = null, challengeT = 0, peakE = 0;
+    var PRI = { vocal: 4, wind: 3, "new": 2.5, steady: 1.5, string: 1 };
+
+    function reset(rate) {
+      sr = rate; binHz = sr / N; lo = Math.floor(90 / binHz); hi = Math.min(HALF - 2, Math.ceil(5000 / binHz));
+      ring = []; contours = []; recent = []; holdPri = 0; holdT = -9; chosen = null; selHist = []; selEs = []; lastOn = -1; challenger = null; peakE = 0;
+      gridF = []; for (var c = 0; ; c += 10) { var f = 80 * Math.pow(2, c / 1200); if (f > 1100) break; gridF.push(f); }
+      sal = new Float32Array(gridF.length);
+    }
+    function pushFrame(x, t) {
+      var o = pool.length ? pool.pop() : { mag: new Float32Array(HALF), wide: new Float32Array(HALF) };
+      spectrum(x, o.mag); o.t = t;
+      for (var k = 0; k < HALF; k++) {
+        var v = o.mag[k];
+        for (var d = -2; d <= 2; d++) { var kk = k + d; if (kk >= 0 && kk < HALF && o.mag[kk] > v) v = o.mag[kk]; }
+        o.wide[k] = v;
+      }
+      ring.push(o);
+      if (ring.length > 2 * LA + 6) pool.push(ring.shift());
+    }
+    function indexOf(t) {
+      for (var i = ring.length - 1; i >= 0; i--) if (Math.abs(ring[i].t - t) < 0.004) return i;
+      return -1;
+    }
+    function peakAt(f) {
+      var b = f / binHz, i0 = Math.round(b);
+      if (i0 < 1 || i0 >= HALF - 1) return 0;
+      return Math.max(X[i0 - 1], X[i0], X[i0 + 1]);
+    }
+    function refine(f0) {
+      // average the harmonics' interpolated peak positions for a precise pitch
+      var sw = 0, sl = 0;
+      for (var h = 1; h <= 4; h++) {
+        var b = h * f0 / binHz, i0 = Math.round(b), best = i0;
+        if (i0 < 2 || i0 >= HALF - 2) break;
+        for (var d = -1; d <= 1; d++) if (X[i0 + d] > X[best]) best = i0 + d;
+        var A = X[best - 1], B = X[best], C = X[best + 1];
+        if (B <= 0) continue;
+        var den = A - 2 * B + C, off = den !== 0 ? 0.5 * (A - C) / den : 0;
+        if (off > 0.5 || off < -0.5) off = 0;
+        var fh = (best + off) * binHz / h;
+        if (Math.abs(1200 * Math.log(fh / f0) / Math.LN2) > 60) continue;
+        sw += B; sl += B * Math.log(fh);
+      }
+      return sw > 0 ? Math.exp(sl / sw) : f0;
+    }
+    function avg(a, n) { var s = 0, c = 0; for (var i = Math.max(0, a.length - n); i < a.length; i++) { s += a[i]; c++; } return c ? s / c : 0; }
+    function jitter(c) {
+      // pitch movement left after removing the slow melody line (cents rms)
+      var ms = c.ms, n = ms.length; if (n < 9) return 0;
+      var s = 0, k = 0, ds = 0, prev = null;
+      for (var i = Math.max(4, n - 40); i < n - 4; i++) {
+        var mean = 0; for (var j = i - 4; j <= i + 4; j++) mean += ms[j];
+        var r = (ms[i] - mean / 9) * 100; s += r * r; k++;
+        if (prev !== null) ds += (r - prev) * (r - prev);
+        prev = r;
+      }
+      if (!k) return 0;
+      var rms = Math.sqrt(s / k), drms = k > 1 ? Math.sqrt(ds / (k - 1)) : 0;
+      // a voice wobbles smoothly; a shaky pitch estimate jumps frame to frame
+      return drms > 0.9 * rms ? 0 : rms;
+    }
+    function plucked(c, t) {
+      var es = c.es, ts = c.ts, n = es.length; if (n < 6) return false;
+      var from = Math.max(0, n - 50), p = from;
+      for (var i = from; i < n; i++) if (es[i] > es[p]) p = i;
+      if (ts[p] - Math.max(c.t0, ts[from]) > 0.08 && p !== from) return false;   // slow attack: bowed or blown
+      if (t - ts[p] < 0.1 || es[n - 1] > 0.45 * es[p]) return false;          // not yet dying away
+      var mn = es[p], at01 = -1;
+      for (i = p + 1; i < n; i++) {
+        if (es[i] > 1.3 * mn) return false; if (es[i] < mn) mn = es[i];
+        if (at01 < 0 && ts[i] - ts[p] >= 0.1) at01 = i;
+      }
+      if (at01 < 0 || es[at01] > 0.8 * es[p]) return false;   // held, then stopped: not a pluck
+      return true;
+    }
+    function sustained(c) {
+      // energy holding up over the last 0.1 s (blown or sung), not dying away like a pluck
+      var es = c.es, n = es.length; if (n < 8) return false;
+      var mx = 0; for (var i = n - 8; i < n; i++) if (es[i] > mx) mx = es[i];
+      return es[n - 1] >= 0.55 * mx;
+    }
+    function classify(c, t) {
+      if (plucked(c, t)) return "string";
+      var hsA = avg(c.hss, 20);
+      if (hsA > 0.6) return "steady";   // energy only in high partials: noise, not a melody
+      var jt = jitter(c);
+      if (c.ms.length >= 9 && jt >= 5) { c.own = true; return "vocal"; }
+      if (c.inh === "vocal") {
+        if (avg(c.r1s, 20) < 0.8 && (c.ms.length < 20 || jt >= 2.5)) return "vocal";
+        c.inh = null;   // a perfectly still pitch is not a voice after all
+      }
+      if (avg(c.r1s, 20) >= 0.6 && hsA < 0.08 && sustained(c)) return "wind";
+      if (c.inh === "wind" && c.es.length >= 8 && !sustained(c)) c.inh = null;
+      if (c.inh) return c.inh;
+      return t - c.t0 < 0.12 ? "new" : "steady";
+    }
+
+    function track(ci, t, causal) {
+      var a = Math.max(0, ci - (causal ? 6 : LA)), b = causal ? ci : Math.min(ring.length - 1, ci + LA);
+      var mag = ring[ci].mag, n = b - a + 1, E = 0, k, j;
+      for (k = 0; k < HALF; k++) X[k] = 0;
+      for (k = lo; k <= hi; k++) {
+        for (j = 0; j < n; j++) tmp[j] = ring[a + j].wide[k];
+        var Hm = med(tmp, n), c2 = 0;
+        for (j = k - 8; j <= k + 8; j++) tmp2[c2++] = j >= 0 && j < HALF ? mag[j] : 0;
+        var Pm = med(tmp2, c2), Hk = Math.min(Hm, ring[ci].wide[k]), w = Hk * Hk / (Hk * Hk + Pm * Pm + 1e-12);
+        X[k] = mag[k] * w; E += X[k] * X[k];
+      }
+      peakE = Math.max(peakE * 0.9995, E);
+      var cands = [];
+      if (E > 2 && E > peakE * 3e-4) {
+        var g, h, mx = 0, pk = [], fmax = 0;
+        for (k = lo + 1; k < hi; k++) if (X[k] > fmax) fmax = X[k];
+        for (k = lo + 1; k < hi; k++) {
+          var A0 = X[k - 1], B0 = X[k], C0 = X[k + 1];
+          if (B0 < 0.01 * fmax || B0 < A0 || B0 <= C0) continue;
+          var dn = A0 - 2 * B0 + C0, of = dn !== 0 ? 0.5 * (A0 - C0) / dn : 0;
+          pk.push({ f: (k + of) * binHz, a: B0 - 0.25 * (A0 - C0) * of });
+        }
+        pk.sort(function (p, q) { return q.a - p.a; }); if (pk.length > 40) pk.length = 40;
+        for (g = 0; g < gridF.length; g++) sal[g] = 0;
+        var c0 = 1200 * Math.log(gridF[0]) / Math.LN2;
+        for (var pi = 0; pi < pk.length; pi++) {
+          for (h = 1; h <= 10; h++) {
+            var cf = 1200 * Math.log(pk[pi].f / h) / Math.LN2 - c0, gi = cf / 10;
+            if (gi < -4) break;
+            for (var gg = Math.ceil(gi - 4); gg <= Math.floor(gi + 4); gg++) {
+              if (gg < 0 || gg >= gridF.length) continue;
+              var dv = (gg - gi) / 4, wv = Math.cos(dv * Math.PI / 2);
+              sal[gg] += wv * wv * Math.pow(0.8, h - 1) * pk[pi].a;
+            }
+          }
+        }
+        for (g = 0; g < gridF.length; g++) if (sal[g] > mx) mx = sal[g];
+        for (g = 1; g < gridF.length - 1; g++) {
+          if (sal[g] < 0.1 * mx || sal[g] < sal[g - 1] || sal[g] < sal[g + 1]) continue;
+          cands.push({ f: gridF[g], s: sal[g] });
+        }
+        cands.sort(function (p, q) { return q.s - p.s; });
+        var kept = [];
+        for (var i = 0; i < cands.length && kept.length < 6; i++) {
+          var cd = cands[i], close = false;
+          for (j = 0; j < kept.length; j++) if (Math.abs(1200 * Math.log(cd.f / kept[j].f) / Math.LN2) < 100) close = true;
+          if (close) continue;
+          var hv = [], e = 0, top = 0;
+          for (h = 1; h <= 10; h++) { var v = cd.f * h / binHz < hi ? peakAt(cd.f * h) : 0; hv.push(v); e += v * v; if (h >= 2 && h <= 5 && v > top) top = v; }
+          if (hv[0] < 0.06 * top) continue;                    // phantom: no energy at its own fundamental
+          var hiE = 0; for (h = 4; h < 10; h++) hiE += hv[h] * hv[h];
+          var fr = refine(cd.f);
+          kept.push({ f: fr, m: 69 + 12 * Math.log(fr / 440) / Math.LN2, s: cd.s, e: e, r1: hv[0] * hv[0] / (e || 1), hs: hiE / (e || 1) });
+        }
+        cands = kept;
+      }
+      // match candidates to tracked lines
+      var used = [];
+      for (i = 0; i < cands.length; i++) {
+        var cand = cands[i], best = null, bd = 0.6;
+        for (j = 0; j < contours.length; j++) {
+          var c = contours[j];
+          if (c.lastT === t || c.lastT < t - 0.06) continue;
+          if (Math.abs(cand.r1 - avg(c.r1s, 5)) > 0.35) continue;   // tone colour jumped: a different sound
+          var d = Math.abs(cand.m - c.lastM); if (d < bd) { bd = d; best = c; }
+        }
+        if (!best) {
+          best = { t0: t, lastT: -1, lastM: cand.m, ms: [], es: [], ts: [], r1s: [], hss: [], cls: "new", inh: null, lastOn: -1, s: 0 };
+          // a new note of the same instrument inherits what it is
+          var donor = null, dd = 8;
+          var pool2 = contours;
+          for (j = 0; j < pool2.length; j++) {
+            var o = pool2[j], ok = false;
+            if (o.lastT === t || o.lastT < t - 0.1 || o.cls === "new" || o.cls === "string") continue;
+            var or1 = avg(o.r1s, 10), ohs = avg(o.hss, 10);
+            if (o.cls === "vocal") {
+              ok = cand.r1 < 0.8 && o.own;
+              // not if it sits exactly on a harmonic of another line sounding now
+              for (var q = 0; q < contours.length && ok; q++) {
+                var oq = contours[q]; if (oq === o || oq.lastT < t - 0.02 || oq.lastM >= cand.m) continue;
+                var dq = cand.m - oq.lastM;
+                if (Math.abs(dq - 12) < 0.12 || Math.abs(dq - 19.02) < 0.12 || Math.abs(dq - 24) < 0.12) ok = false;
+              }
+            }
+            else if (o.cls === "wind") ok = cand.r1 >= 0.55 && cand.hs < 0.1 && sustained(o);
+            else ok = Math.abs(or1 - cand.r1) < 0.25 && Math.abs(ohs - cand.hs) < 0.15;
+            var pd = Math.abs(o.lastM - cand.m);
+            if (ok && pd < dd && (pd > 0.4 || o === chosen)) { dd = pd; donor = o; }
+          }
+          if (donor && donor.cls !== "string") { best.inh = donor.cls; best.cls = donor.cls; best.contOf = donor; }
+          contours.push(best);
+        }
+        best.lastT = t; best.lastM = cand.m; best.s = cand.s;
+        best.ms.push(cand.m); best.es.push(cand.e); best.ts.push(t); best.r1s.push(cand.r1); best.hss.push(cand.hs);
+        if (best.ms.length > 64) { best.ms.shift(); best.es.shift(); best.ts.shift(); best.r1s.shift(); best.hss.shift(); }
+        best.cls = classify(best, t);
+        (best.clsH || (best.clsH = [])).push(best.cls);
+      }
+      contours = contours.filter(function (c) {
+        if (c.lastT >= t - 0.12) return true;
+        if (c.cls === "vocal" || c.cls === "wind") recent.push(c);
+        return false;
+      });
+      recent = recent.filter(function (c) { return c.lastT >= t - 0.3; });
+
+      // everything sounding now, for the selection step
+      var snap = [];
+      contours.forEach(function (c) { if (c.lastT === t) snap.push({ c: c, m: c.lastM, s: c.s, e: c.es[c.es.length - 1], n: c.clsH.length, i: c.clsH.length - 1 }); });
+      return snap;
+    }
+
+    // pick the line to follow. For song files this runs ~0.4 s behind the analysis,
+    // so each line's type is judged with what comes next as well.
+    var selHist = [], selEs = [], lastOn = -1;
+    function labelAt(en) {
+      var h = en.c.clsH, cnt = {}, best = null, bc = 0;
+      for (var i = en.i; i < h.length && i <= en.i + 20; i++) {
+        var k = h[i]; if (k === "new") continue;
+        cnt[k] = (cnt[k] || 0) + 1; if (cnt[k] > bc) { bc = cnt[k]; best = k; }
+      }
+      return best || h[en.i] || "new";
+    }
+    function select(snap, t) {
+      for (var q = 0; q < snap.length; q++) snap[q].cls = labelAt(snap[q]);
+      var maxS = 0, i, top = null, bs = -1, cur = null;
+      for (i = 0; i < snap.length; i++) if (snap[i].s > maxS) maxS = snap[i].s;
+      for (i = 0; i < snap.length; i++) {
+        var en = snap[i], c = en.c;
+        if (chosen && (c === chosen || c.contOf === chosen)) cur = en;
+        if (en.n < 3 || en.s < 0.12 * maxS) continue;
+        var sc = PRI[en.cls] * 10 + en.s / maxS; if (sc > bs) { bs = sc; top = en; }
+      }
+      var pick = top;
+      if (top && cur && cur !== top) {
+        var pc = PRI[cur.cls], pb = PRI[top.cls];
+        var wait = pb > pc ? 0.05 : (top.s > 1.25 * cur.s ? 0.06 : Infinity);
+        if (challenger !== top.c) { challenger = top.c; challengeT = t; }
+        if (t - challengeT < wait) pick = cur;
+      }
+      if (!pick || pick.c !== chosen) {
+        if (!(pick && cur && pick === cur)) { selHist = []; selEs = []; }
+        if (pick !== cur) challenger = null;
+      }
+      chosen = pick ? pick.c : null;
+      if (!pick) return { m: null, onset: false };
+      selHist.push(pick.m); if (selHist.length > 3) selHist.shift();
+      selEs.push(pick.e); if (selEs.length > 8) selEs.shift();
+      var onset = false, ne = selEs.length;
+      if (ne > 6 && pick.n > 12) {
+        var mn = Infinity; for (i = 0; i < ne - 1; i++) if (selEs[i] < mn) mn = selEs[i];
+        if (selEs[ne - 1] > 3 * mn && t - lastOn > 0.15) { onset = true; lastOn = t; }
+      }
+      var h3 = selHist.slice().sort(function (p, q) { return p - q; });
+      return { m: h3[h3.length >> 1], onset: onset, cls: pick.cls };
+    }
+    function analyse(ci, t, causal) { return select(track(ci, t, causal), t); }
+    return { reset: reset, pushFrame: pushFrame, analyse: analyse, track: track, select: select, indexOf: indexOf, size: function () { return ring.length; }, LA: LA, N: N };
+  })();
+
   // ---------- song files: analyse the decoded audio itself at a fixed rate ----------
   var fileMono = null, fileSr = 44100, nextHop = 0, shortRms = [], lastFM = null, lastFHz = 0, lastOnset = -1;
-  var HOP = 0.0125, FWIN = 2048, segBuf = new Float32Array(2048);
-  function analyseFileUpTo(target) {
+  var HOP = 0.0125, FWIN = MEL.N, segBuf = new Float32Array(MEL.N);
+  var genT = 0, anaT = 0, selQ = [], AHEAD = 0.4;
+  function analyseFileUpTo(target, flush) {
     if (!fileMono) return;
-    var len = fileMono.length;
-    while (nextHop <= target) {
-      var c = Math.round(nextHop * fileSr), st = c - FWIN / 2, i;
-      for (i = 0; i < FWIN; i++) { var k = st + i; segBuf[i] = k >= 0 && k < len ? fileMono[k] : 0; }
-      // re-articulation: a sharp rise in short-term loudness starts a new note, even on the same swara
-      var e = 0; for (i = FWIN / 2 - 256; i < FWIN / 2 + 256; i++) e += segBuf[i] * segBuf[i];
-      var r = Math.sqrt(e / 512), lo = Infinity;
-      for (i = 0; i < shortRms.length; i++) if (shortRms[i] < lo) lo = shortRms[i];
-      if (shortRms.length >= 4 && r > 0.01 && r > 1.8 * lo && nextHop - lastOnset > 0.1) {
-        lastOnset = nextHop;
-        // only split when the same swara is struck again; a change of swara is handled by pitch
-        if (S.seg.emitted != null) S.onset = true;
+    var len = fileMono.length, i;
+    // analysis runs ~0.4 s ahead of what you hear, so a new note is judged with what follows it
+    var until = flush ? target + AHEAD : target + AHEAD;
+    while (anaT <= until + 1e-9) {
+      while (genT <= anaT + MEL.LA * HOP + 1e-6) {
+        var c = Math.round(genT * fileSr), st = c - FWIN / 2;
+        for (i = 0; i < FWIN; i++) { var k = st + i; segBuf[i] = k >= 0 && k < len ? fileMono[k] : 0; }
+        MEL.pushFrame(segBuf, genT); genT += HOP;
       }
-      shortRms.push(r); if (shortRms.length > 6) shortRms.shift();
-      var f = detect(segBuf, fileSr), m = null, hz = 0;
-      if (f) {
-        med.push(f); if (med.length > 3) med.shift();
-        hz = median(med); m = 69 + 12 * Math.log2(hz / 440);
-      } else med.length = 0;
-      processFrame(nextHop, m, HOP);
-      lastFM = m; lastFHz = hz;
-      nextHop += HOP;
+      var ci = MEL.indexOf(anaT);
+      selQ.push({ t: anaT, snap: ci >= 0 ? MEL.track(ci, anaT, false) : [] });
+      anaT += HOP;
+    }
+    while (selQ.length && selQ[0].t <= target + 1e-9) {
+      var it = selQ.shift(), r = MEL.select(it.snap, it.t);
+      if (r.onset && S.seg.emitted != null) S.onset = true;
+      processFrame(it.t, r.m, HOP);
+      lastFM = r.m; lastFHz = r.m == null ? 0 : midiToHz(r.m);
     }
   }
 
@@ -790,11 +1093,10 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       m = lastFM; hz = lastFHz;
     } else {
       analyser.getFloatTimeDomainData(buf);
-      var f = detect(buf, ctx.sampleRate);
-      if (f) {
-        med.push(f); if (med.length > 3) med.shift();
-        hz = median(med); m = 69 + 12 * Math.log2(hz / 440);
-      } else med.length = 0;
+      MEL.pushFrame(buf, t);
+      var rr = MEL.analyse(MEL.size() - 1, t, true);
+      if (rr.onset && S.seg.emitted != null) S.onset = true;
+      m = rr.m; hz = m == null ? 0 : midiToHz(m);
       processFrame(t, m, dt);
     }
     lastVoiced = m != null; if (m != null) lastM = m;
@@ -893,7 +1195,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       begin("file", "Song");
       var nch = audio.numberOfChannels, mono = new Float32Array(audio.length);
       for (var ci = 0; ci < nch; ci++) { var cd = audio.getChannelData(ci); for (var si = 0; si < cd.length; si++) mono[si] += cd[si] / nch; }
-      fileMono = mono; fileSr = audio.sampleRate; nextHop = 0; shortRms = []; lastOnset = -1; lastFM = null; lastFHz = 0;
+      fileMono = mono; fileSr = audio.sampleRate; MEL.reset(fileSr); genT = 0; anaT = 0; selQ = []; nextHop = 0; shortRms = []; lastOnset = -1; lastFM = null; lastFHz = 0;
       var b = ctx.createBufferSource(); b.buffer = audio;
       b.connect(analyser); analyser.connect(ctx.destination);
       t0 = ctx.currentTime + 0.05; b.start(t0);
