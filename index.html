@@ -207,6 +207,13 @@ canvas { display: block; width: 100%; height: 100%; }
           <option value="d">सा रे ग</option>
         </select>
       </div>
+      <div class="field">
+        <label for="srcMode">Listen for</label>
+        <select id="srcMode">
+          <option value="solo">One instrument or voice</option>
+          <option value="mix">Full song (voice first)</option>
+        </select>
+      </div>
     </div>
   </section>
 
@@ -309,7 +316,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     big: $("big"), sub: $("sub"), needle: $("needle"), hz: $("hz"), cents: $("cents"), saptak: $("saptak"),
     bars: $("bars"), seq: $("seq"), status: $("status"), tag: $("traceTag"), total: $("total"),
     btnDemo: $("btnDemo"), btnMic: $("btnMic"), btnStop: $("btnStop"), fileIn: $("fileIn"), fileLabel: $("fileLabel"),
-    saNote: $("saNote"), saOct: $("saOct"), tune: $("tune"), tuneVal: $("tuneVal"), script: $("script"), cv: $("trace")
+    srcMode: $("srcMode"), saNote: $("saNote"), saOct: $("saOct"), tune: $("tune"), tuneVal: $("tuneVal"), script: $("script"), cv: $("trace")
   };
 
   NOTE_NAMES.forEach(function (n, i) {
@@ -751,7 +758,13 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     } catch (e) {}
     return ctx;
   }
+  function applyMode() {
+    SOLO = els.srcMode.value !== "mix";
+    if (SOLO) { MIN_DUR = 0.05; MIN_HITS = 4; REART_GAP = 0.06; }
+    else { MIN_DUR = 0.07; MIN_HITS = 5; REART_GAP = 0.02; }
+  }
   function begin(newMode, tag) {
+    applyMode();
     stopAudio(true);
     ensureCtx();
     analyser = ctx.createAnalyser(); analyser.fftSize = MEL.N; analyser.smoothingTimeConstant = 0;
@@ -1121,6 +1134,33 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
   // ---------- song files: analyse the decoded audio itself at a fixed rate ----------
   var fileMono = null, fileSr = 44100, nextHop = 0, shortRms = [], lastFM = null, lastFHz = 0, lastOnset = -1;
   var HOP = 0.0125, FWIN = MEL.N, segBuf = new Float32Array(MEL.N);
+  // "One instrument or voice": the direct pitch detector, precise and quick on a single line
+  var SOLO = true, SWIN = 2048, soloBuf = new Float32Array(SWIN);
+  function soloFileUpTo(target) {
+    if (!fileMono) return;
+    var len = fileMono.length;
+    while (nextHop <= target) {
+      var c = Math.round(nextHop * fileSr), st = c - SWIN / 2, i;
+      for (i = 0; i < SWIN; i++) { var k = st + i; soloBuf[i] = k >= 0 && k < len ? fileMono[k] : 0; }
+      // a sharp rise in loudness is a re-strike, so the same swara played again is a new note
+      var e = 0; for (i = SWIN / 2 - 256; i < SWIN / 2 + 256; i++) e += soloBuf[i] * soloBuf[i];
+      var r = Math.sqrt(e / 512), lo = Infinity;
+      for (i = 0; i < shortRms.length; i++) if (shortRms[i] < lo) lo = shortRms[i];
+      if (shortRms.length >= 4 && r > 0.01 && r > 1.8 * lo && nextHop - lastOnset > 0.1) {
+        lastOnset = nextHop;
+        if (S.seg.emitted != null) S.onset = true;
+      }
+      shortRms.push(r); if (shortRms.length > 6) shortRms.shift();
+      var f = detect(soloBuf, fileSr), m = null, hz = 0;
+      if (f) {
+        med.push(f); if (med.length > 3) med.shift();
+        hz = median(med); m = 69 + 12 * Math.log2(hz / 440);
+      } else med.length = 0;
+      processFrame(nextHop, m, HOP);
+      lastFM = m; lastFHz = hz;
+      nextHop += HOP;
+    }
+  }
   var genT = 0, anaT = 0, selQ = [], AHEAD = 0.4;
   // live sound (microphone, demo) is captured continuously so it gets the same analysis as a file
   var LIVE_N = 1 << 20, LIVE_MASK = LIVE_N - 1, liveRing = new Float32Array(LIVE_N), liveLen = 0, proc = null, procOut = null;
@@ -1163,8 +1203,16 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     var t = ctx.currentTime - t0, dt = Math.min(0.1, Math.max(0, t - lastT)); lastT = t;
     var m = null, hz = 0;
     if (mode === "file" && fileMono) {
-      analyseFileUpTo(Math.min(t, fileDur));
+      if (SOLO) soloFileUpTo(Math.min(t, fileDur)); else analyseFileUpTo(Math.min(t, fileDur));
       m = lastFM; hz = lastFHz;
+    } else if (SOLO) {
+      analyser.getFloatTimeDomainData(buf);
+      var f1 = detect(buf, ctx.sampleRate);
+      if (f1) {
+        med.push(f1); if (med.length > 3) med.shift();
+        hz = median(med); m = 69 + 12 * Math.log2(hz / 440);
+      } else med.length = 0;
+      processFrame(t, m, dt);
     } else {
       analyser.getFloatTimeDomainData(buf);   // for the level meter and live tempo
       analyseLive(false);
@@ -1209,7 +1257,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
   }
 
   function finished(msg) {
-    if (mode && mode !== "file" && LIVE) analyseLive(true);
+    if (mode && mode !== "file" && LIVE && !SOLO) analyseLive(true);
     var lp = S.points[S.points.length - 1];
     if (lp && lp.m != null) S.points.push({ t: lp.t + 0.05, m: null });
     var le2 = S.ev[S.ev.length - 1];
@@ -1273,7 +1321,7 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
       b.connect(analyser); analyser.connect(ctx.destination);
       t0 = ctx.currentTime + 0.05; b.start(t0);
       src = b;
-      b.onended = function () { analyseFileUpTo(fileDur); finished("Finished " + fileName + "."); };
+      b.onended = function () { if (SOLO) soloFileUpTo(fileDur); else analyseFileUpTo(fileDur); finished("Finished " + fileName + "."); };
       setTimeout(function () {
         try {
           var fb = tempoFrom(fileEnvelope(audio), 100);
@@ -1349,6 +1397,12 @@ if (!(window.AudioContext || window.webkitAudioContext) || !window.Promise || !A
     panT = +this.value; document.getElementById("panVal").textContent = fmt(panT) + "–" + fmt(panT + WIN); drawTrace();
   });
 
+  try { var sm = localStorage.getItem("swaraSrcMode"); if (sm === "mix" || sm === "solo") els.srcMode.value = sm; } catch (e) {}
+  els.srcMode.addEventListener("change", function () {
+    try { localStorage.setItem("swaraSrcMode", els.srcMode.value); } catch (e) {}
+    setStatus(LIVE ? "The new listening mode applies from the next song or microphone start." :
+      (els.srcMode.value === "mix" ? "Full song mode: follows the voice first, then wind, then strings; ignores drums." : "One instrument or voice: precise and quick on a single melody line."));
+  });
   els.saNote.addEventListener("change", function () { S.saNote = +els.saNote.value; remapAll(); });
   els.saOct.addEventListener("change", function () { S.saOct = +els.saOct.value; remapAll(); });
   els.tune.addEventListener("input", function () { S.tune = +els.tune.value; remapAll(); });
